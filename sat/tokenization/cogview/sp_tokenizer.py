@@ -1,8 +1,10 @@
 """
 from https://github.com/openai/gpt-2/, changed for chinese
 """
+
 import json
 import os
+
 import sentencepiece as spm
 
 """
@@ -20,10 +22,16 @@ python setup.py install
 
 """
 
-PRETRAINED_MODEL_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)),
-     'embed_assets', 'chinese_sentencepiece/cog-pretrain.model')
-PRETRAINED_MODEL_FILE_ICE = os.path.join(os.path.dirname(os.path.dirname(__file__)),
-     'embed_assets', 'chinese_sentencepiece/ice.model') # merge xlnet 3,2000 En tokens
+PRETRAINED_MODEL_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)),
+    "embed_assets",
+    "chinese_sentencepiece/cog-pretrain.model",
+)
+PRETRAINED_MODEL_FILE_ICE = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)),
+    "embed_assets",
+    "chinese_sentencepiece/ice.model",
+)  # merge xlnet 3,2000 En tokens
 
 
 def get_pairs(word):
@@ -52,7 +60,7 @@ class Encoder:
             return token
 
         while True:
-            bigram = min(pairs, key=lambda pair: self.bpe_ranks.get(pair, float('inf')))
+            bigram = min(pairs, key=lambda pair: self.bpe_ranks.get(pair, float("inf")))
             if bigram not in self.bpe_ranks:
                 break
             first, second = bigram
@@ -79,7 +87,7 @@ class Encoder:
                 break
             else:
                 pairs = get_pairs(word)
-        word = ' '.join(word)
+        word = " ".join(word)
         self.cache[token] = word
         return word
 
@@ -87,12 +95,12 @@ class Encoder:
         return [self.encoder.get(token, 1) for token in self.tokenize(text)]
 
     def decode(self, tokens):
-        text = ''.join([self.decoder[token] for token in tokens])
+        text = "".join([self.decoder[token] for token in tokens])
         return text
 
     def tokenize(self, text):
         bpe_tokens = []
-        bpe_tokens.extend(bpe_token for bpe_token in self.bpe(text).split(' '))
+        bpe_tokens.extend(bpe_token for bpe_token in self.bpe(text).split(" "))
         return bpe_tokens
 
     def convert_tokens_to_ids(self, tokens):
@@ -139,21 +147,23 @@ def get_encoder(encoder_file, bpe_file):
     if (".model" == extension) and (bpe_file == ""):
         return Encoder_SP(encoder_file)
     else:
-        with open(encoder_file, 'r', encoding="utf-8") as f:
+        with open(encoder_file, "r", encoding="utf-8") as f:
             encoder = json.load(f)
-        with open(bpe_file, 'r', encoding="utf-8") as f:
+        with open(bpe_file, "r", encoding="utf-8") as f:
             bpe_data = f.read()
-        bpe_merges = [tuple(merge_str.split()) for merge_str in bpe_data.split('\n')[1:-1]]
+        bpe_merges = [
+            tuple(merge_str.split()) for merge_str in bpe_data.split("\n")[1:-1]
+        ]
         return Encoder(
             encoder=encoder,
             bpe_merges=bpe_merges,
         )
 
 
-def from_pretrained(tokenizer_type='cogview'):
-    if tokenizer_type == 'cogview_ICE':
+def from_pretrained(tokenizer_type="cogview"):
+    if tokenizer_type == "cogview_ICE":
         return get_encoder(PRETRAINED_MODEL_FILE_ICE, "")
-    elif tokenizer_type == 'cogview':
+    elif tokenizer_type == "cogview":
         return get_encoder(PRETRAINED_MODEL_FILE, "")
     else:
-        raise ValueError('Unknown cogview tokenizer.')
+        raise ValueError("Unknown cogview tokenizer.")

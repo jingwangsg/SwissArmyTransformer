@@ -1,20 +1,25 @@
 from transformers import T5Tokenizer
-from .glm.tokenization import Tokenization, CommandToken
 
+from .glm.tokenization import CommandToken, Tokenization
 
 PRETRAINED_VOCAB_FILES_MAP = {
     "t5-small": "/dataset/fd5061f6/yanan/huggingface_models/t5-small",
     "t5-base": "/dataset/fd5061f6/yanan/huggingface_models/t5-base",
     "t5-large": "/dataset/fd5061f6/yanan/huggingface_models/t5-large",
     "t5-3b": "/dataset/fd5061f6/yanan/huggingface_models/t5-3b",
-    "t5-11b": "/dataset/fd5061f6/yanan/huggingface_models/t5-11b"
+    "t5-11b": "/dataset/fd5061f6/yanan/huggingface_models/t5-11b",
 }
 
+
 class HFTokenizer:
-    def __init__(self, model_cls, model_type_or_path=None, cache_dir=None, command_tokens=None):
+    def __init__(
+        self, model_cls, model_type_or_path=None, cache_dir=None, command_tokens=None
+    ):
         if model_type_or_path in PRETRAINED_VOCAB_FILES_MAP:
             model_type_or_path = PRETRAINED_VOCAB_FILES_MAP[model_type_or_path]
-        self.text_tokenizer = model_cls.from_pretrained(model_type_or_path, cache_dir=cache_dir)
+        self.text_tokenizer = model_cls.from_pretrained(
+            model_type_or_path, cache_dir=cache_dir
+        )
         self.num_tokens = len(self.text_tokenizer)
         self._command_tokens = []
         self.command_name_map = {}
@@ -68,14 +73,19 @@ class HFTokenizer:
 
 class HFT5Tokenizer(HFTokenizer):
     def __init__(self, model_type_or_path=None, cache_dir=None):
-        super().__init__(T5Tokenizer, model_type_or_path=model_type_or_path, cache_dir=cache_dir)
+        super().__init__(
+            T5Tokenizer, model_type_or_path=model_type_or_path, cache_dir=cache_dir
+        )
         command_tokens = [
-            CommandToken('eos', '</s>', self.TokenToId("</s>")),
-            CommandToken('pad', '<pad>', self.TokenToId("<pad>")),
-            CommandToken('sop', '<pad>', self.TokenToId("<pad>")),
-            CommandToken('eop', '</s>', self.TokenToId("</s>"))
+            CommandToken("eos", "</s>", self.TokenToId("</s>")),
+            CommandToken("pad", "<pad>", self.TokenToId("<pad>")),
+            CommandToken("sop", "<pad>", self.TokenToId("<pad>")),
+            CommandToken("eop", "</s>", self.TokenToId("</s>")),
         ]
         for i in range(100):
-            command_tokens.append(CommandToken(f'MASK{i}', f'<extra_id_{i}>', self.TokenToId(f'<extra_id_{i}>')))
+            command_tokens.append(
+                CommandToken(
+                    f"MASK{i}", f"<extra_id_{i}>", self.TokenToId(f"<extra_id_{i}>")
+                )
+            )
         self.command_tokens = command_tokens
-
