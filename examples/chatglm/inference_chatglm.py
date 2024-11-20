@@ -1,17 +1,20 @@
 from dotenv import load_dotenv
+
 load_dotenv()
 
-import os
-import torch
 import argparse
-from sat import get_args, AutoModel
+import os
+
+import torch
+
+from sat import AutoModel, get_args
 
 args = get_args()
 
-model_type = 'chatglm-6b'
+model_type = "chatglm-6b"
 model, args = AutoModel.from_pretrained(model_type, args)
 device = model.parameters().__next__().device
-from transformers import AutoTokenizer, AutoModel
+from transformers import AutoModel, AutoTokenizer
 
 tokenizer = AutoTokenizer.from_pretrained("THUDM/chatglm-6b", trust_remote_code=True)
 
@@ -24,8 +27,8 @@ with torch.no_grad():
     Feeding a single input_ids to model only works for training, not inference.
     This is because for generation or inference, tokens are left padded.
     """
-    encoded_input = tokenizer(text, return_tensors='pt', padding=True)
-    encoded_input = {k:v.to(device) for k, v in encoded_input.items()}
+    encoded_input = tokenizer(text, return_tensors="pt", padding=True)
+    encoded_input = {k: v.to(device) for k, v in encoded_input.items()}
     dst_output = model(**encoded_input)
     output = dst_output[0].cpu()
     print(output)

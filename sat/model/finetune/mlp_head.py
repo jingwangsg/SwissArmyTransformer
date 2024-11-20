@@ -1,23 +1,32 @@
-
 # -*- encoding: utf-8 -*-
-'''
+"""
 @File    :   mlp_head.py
 @Time    :   2021/12/12 20:44:09
 @Author  :   Ming Ding 
 @Contact :   dm18@mails.tsinghua.edu.cn
-'''
+"""
 
+import math
 # here put the import lib
 import os
-import sys
-import math
 import random
+import sys
 
 import torch
-from sat.model.base_model import BaseModel, BaseMixin, non_conflict
+
+from sat.model.base_model import BaseMixin, BaseModel, non_conflict
+
 
 class MLPHeadMixin(BaseMixin):
-    def __init__(self, hidden_size, *output_sizes, bias=True, activation_func=torch.nn.functional.relu, init_mean=0, init_std=0.005):
+    def __init__(
+        self,
+        hidden_size,
+        *output_sizes,
+        bias=True,
+        activation_func=torch.nn.functional.relu,
+        init_mean=0,
+        init_std=0.005
+    ):
         super().__init__()
         self.activation_func = activation_func
         last_size = hidden_size

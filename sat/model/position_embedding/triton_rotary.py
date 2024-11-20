@@ -1,8 +1,6 @@
-
 from typing import Optional, Union
 
 import torch
-
 import triton
 import triton.language as tl
 
@@ -54,18 +52,17 @@ def rotary_kernel(
     pid_head = tl.program_id(axis=2)
     rotary_dim_half = rotary_dim // 2
 
-    
     X = X + pid_batch * stride_x_batch + pid_head * stride_x_nheads
     OUT = OUT + pid_batch * stride_out_batch + pid_head * stride_out_nheads
     POS = POSITIONS + pid_batch * stride_p_batch
-    
+
     if pid_m * BLOCK_M >= seqlen:
         return
     rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     rm_cs = tl.load(POS + rm, mask=rm < seqlen, other=0)
-    
-    #tl.device_print("rm rm_cs, ", rm, rm_cs)
-    
+
+    # tl.device_print("rm rm_cs, ", rm, rm_cs)
+
     if not IS_SEQLEN_OFFSETS_TENSOR:
         rm_cs = rm_cs + SEQLEN_OFFSETS
     else:
@@ -79,13 +76,19 @@ def rotary_kernel(
         COS = COS + (rm_cs[:, None] * rotary_dim_half + rk_half[None, :])
         SIN = SIN + (rm_cs[:, None] * rotary_dim_half + rk_half[None, :])
         cos = tl.load(
-            COS, mask=(rm_cs[:, None] < seqlen_ro) & (rk_half[None, :] < rotary_dim_half), other=1.0
+            COS,
+            mask=(rm_cs[:, None] < seqlen_ro) & (rk_half[None, :] < rotary_dim_half),
+            other=1.0,
         )
         sin = tl.load(
-            SIN, mask=(rm_cs[:, None] < seqlen_ro) & (rk_half[None, :] < rotary_dim_half), other=0.0
+            SIN,
+            mask=(rm_cs[:, None] < seqlen_ro) & (rk_half[None, :] < rotary_dim_half),
+            other=0.0,
         )
         x0 = tl.load(
-            X, mask=(rm[:, None] < seqlen) & (rk_half[None, :] < rotary_dim_half), other=0.0
+            X,
+            mask=(rm[:, None] < seqlen) & (rk_half[None, :] < rotary_dim_half),
+            other=0.0,
         )
         x1 = tl.load(
             X + rotary_dim_half * stride_x_headdim,
@@ -97,8 +100,12 @@ def rotary_kernel(
         o0 = x0 * cos - x1 * sin
         o1 = x0 * sin + x1 * cos
         # write back result
-        OUT = OUT + (rm[:, None] * stride_out_seqlen + rk_half[None, :] * stride_out_headdim)
-        tl.store(OUT, o0, mask=(rm[:, None] < seqlen) & (rk_half[None, :] < rotary_dim_half))
+        OUT = OUT + (
+            rm[:, None] * stride_out_seqlen + rk_half[None, :] * stride_out_headdim
+        )
+        tl.store(
+            OUT, o0, mask=(rm[:, None] < seqlen) & (rk_half[None, :] < rotary_dim_half)
+        )
         tl.store(
             OUT + rotary_dim_half * stride_out_headdim,
             o1,
@@ -127,8 +134,12 @@ def rotary_kernel(
             mask=(rm_cs[:, None] < seqlen_ro) & (rk_repeat[None, :] < rotary_dim_half),
             other=0.0,
         )
-        x0 = tl.load(X0, mask=(rm[:, None] < seqlen) & (rk[None, :] < rotary_dim), other=0.0)
-        x1 = tl.load(X1, mask=(rm[:, None] < seqlen) & (rk_swap[None, :] < rotary_dim), other=0.0)
+        x0 = tl.load(
+            X0, mask=(rm[:, None] < seqlen) & (rk[None, :] < rotary_dim), other=0.0
+        )
+        x1 = tl.load(
+            X1, mask=(rm[:, None] < seqlen) & (rk_swap[None, :] < rotary_dim), other=0.0
+        )
         if CONJUGATE:
             sin = -sin
         x0_cos = x0 * cos
@@ -162,14 +173,13 @@ def apply_rotary(
     Returns:
         y: (batch, nheads, seqlen, headdim)
     """
-    
-    
+
     batch, nheads, seqlen, headdim = x.shape
-    
+
     seqlen_ro, rotary_dim = cos.shape
 
     batch_p, seqlen_p = position_ids.shape
-    
+
     assert batch_p == batch and seqlen_p == seqlen
     assert sin.shape == cos.shape
     rotary_dim *= 2
@@ -186,7 +196,7 @@ def apply_rotary(
     ), f"Input and cos/sin must have the same dtype, got {x.dtype} and {cos.dtype}"
 
     cos, sin = cos.contiguous(), sin.contiguous()
-    
+
     if isinstance(seqlen_offsets, torch.Tensor):
         assert seqlen_offsets.shape == (batch,)
         assert seqlen_offsets.dtype in [torch.int32, torch.int64]
@@ -230,7 +240,7 @@ def apply_rotary(
             x.stride(-3),  # nheads stride
             x.stride(-2),  # seqlen stride
             x.stride(-1),  # headdim stride
-            position_ids.stride(0), # batch_strides
+            position_ids.stride(0),  # batch_strides
             BLOCK_K,
             isinstance(seqlen_offsets, torch.Tensor),
             False,

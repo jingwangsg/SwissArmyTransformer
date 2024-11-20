@@ -1,14 +1,15 @@
-from sat.model import ChatGLM2Model
 from sat import get_args
+from sat.model import ChatGLM2Model
 
 args = get_args()
 
-model, args = ChatGLM2Model.from_pretrained('chatglm2-6b', args)
+model, args = ChatGLM2Model.from_pretrained("chatglm2-6b", args)
 
 from chat_model import ChatModel
 
 model = ChatModel(args, model=model)
 from transformers import AutoTokenizer
+
 tokenizer = AutoTokenizer.from_pretrained("THUDM/chatglm2-6b", trust_remote_code=True)
 model = model.eval()
 response, history = model.chat(tokenizer, "你好", history=[])

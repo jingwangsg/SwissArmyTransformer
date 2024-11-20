@@ -1,29 +1,47 @@
-import torch
 import argparse
-from sat.model.mixins import CachedAutoregressiveMixin
-from sat.quantization.kernels import quantize
 import os
+
+import torch
+
+from sat.generation.autoregressive_sampling import (
+    BaseStrategy, filling_sequence, get_masks_and_position_ids_default,
+    stream_filling_sequence)
 from sat.model import AutoModel
-
-from sat.generation.autoregressive_sampling import filling_sequence, stream_filling_sequence, BaseStrategy, get_masks_and_position_ids_default
+from sat.model.mixins import CachedAutoregressiveMixin
 from sat.mpu import get_model_parallel_rank
+from sat.quantization.kernels import quantize
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--max_length", type=int, default=2048, help='max length of the total sequence')
-    parser.add_argument("--repetition_penalty", type=float, default=1.0, help='repetition penalty, 1.0 means no penalty.')
-    parser.add_argument("--top_p", type=float, default=0.4, help='top p for nucleus sampling')
-    parser.add_argument("--top_k", type=int, default=1, help='top k for top k sampling')
-    parser.add_argument("--temperature", type=float, default=.8, help='temperature for sampling')
-    parser.add_argument("--english", action='store_true', help='only output English')
-    parser.add_argument("--quant", choices=[8, 4], type=int, default=None, help='quantization bits')
-    parser.add_argument("--from_pretrained", type=str, default="visualglm-6b", help='pretrained ckpt')
+    parser.add_argument(
+        "--max_length", type=int, default=2048, help="max length of the total sequence"
+    )
+    parser.add_argument(
+        "--repetition_penalty",
+        type=float,
+        default=1.0,
+        help="repetition penalty, 1.0 means no penalty.",
+    )
+    parser.add_argument(
+        "--top_p", type=float, default=0.4, help="top p for nucleus sampling"
+    )
+    parser.add_argument("--top_k", type=int, default=1, help="top k for top k sampling")
+    parser.add_argument(
+        "--temperature", type=float, default=0.8, help="temperature for sampling"
+    )
+    parser.add_argument("--english", action="store_true", help="only output English")
+    parser.add_argument(
+        "--quant", choices=[8, 4], type=int, default=None, help="quantization bits"
+    )
+    parser.add_argument(
+        "--from_pretrained", type=str, default="visualglm-6b", help="pretrained ckpt"
+    )
     parser.add_argument("--fp16", action="store_true")
     parser.add_argument("--bf16", action="store_true")
     parser.add_argument("--stream_chat", action="store_true")
     args = parser.parse_args()
-    rank = int(os.environ.get('RANK', 0))
-    world_size = int(os.environ.get('WORLD_SIZE', 1))
+    rank = int(os.environ.get("RANK", 0))
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
 
     from transformers import AutoTokenizer
 
@@ -33,29 +51,36 @@ if __name__ == '__main__':
     model, model_args = AutoModel.from_pretrained(
         args.from_pretrained,
         args=argparse.Namespace(
-        deepspeed=None,
-        local_rank=rank,
-        rank=rank,
-        world_size=world_size,
-        model_parallel_size=world_size,
-        mode='inference',
-        skip_init=True,
-        use_gpu_initialization=True if (torch.cuda.is_available() and args.quant is None) else False,
-        device='cpu' if args.quant else 'cuda',
-        **vars(args)
-    ), url='local', overwrite_args={'model_parallel_size': world_size} if world_size != 1 else {})
+            deepspeed=None,
+            local_rank=rank,
+            rank=rank,
+            world_size=world_size,
+            model_parallel_size=world_size,
+            mode="inference",
+            skip_init=True,
+            use_gpu_initialization=(
+                True if (torch.cuda.is_available() and args.quant is None) else False
+            ),
+            device="cpu" if args.quant else "cuda",
+            **vars(args)
+        ),
+        url="local",
+        overwrite_args={"model_parallel_size": world_size} if world_size != 1 else {},
+    )
     model = model.eval()
     from sat.mpu import get_model_parallel_world_size
-    assert world_size == get_model_parallel_world_size(), "world size must equal to model parallel size for cli_demo!"
+
+    assert (
+        world_size == get_model_parallel_world_size()
+    ), "world size must equal to model parallel size for cli_demo!"
 
     if args.quant:
         quantize(model, args.quant)
         if torch.cuda.is_available():
             model = model.cuda()
     torch.cuda.empty_cache()
-    
-    model.add_mixin('auto-regressive', CachedAutoregressiveMixin())
 
+    model.add_mixin("auto-regressive", CachedAutoregressiveMixin())
 
     def chat_history_to_prompt(history, query):
         prompt = " [INST] "
@@ -63,7 +88,6 @@ if __name__ == '__main__':
             prompt += old_query + " [/INST] " + response + "</s> [INST] "
         prompt += query + " [/INST] "
         return prompt
-    
 
     history = []
     with torch.no_grad():
@@ -90,24 +114,36 @@ if __name__ == '__main__':
                 inputs[k] = inputs[k].cuda()
             origin = inputs["input_ids"][0]
             seq = torch.cat(
-                [origin, torch.tensor([-1]*(args.max_length-len(origin)), device=origin.device)], dim=0
+                [
+                    origin,
+                    torch.tensor(
+                        [-1] * (args.max_length - len(origin)), device=origin.device
+                    ),
+                ],
+                dim=0,
             )
-            strategy = BaseStrategy(temperature=args.temperature, top_p=args.top_p, top_k=args.top_k, end_tokens=[tokenizer.eos_token_id])
+            strategy = BaseStrategy(
+                temperature=args.temperature,
+                top_p=args.top_p,
+                top_k=args.top_k,
+                end_tokens=[tokenizer.eos_token_id],
+            )
             if args.stream_chat:
                 filling_stream = stream_filling_sequence(
-                    model, seq,
+                    model,
+                    seq,
                     batch_size=1,
                     strategy=strategy,
                 )
                 if get_model_parallel_rank() == 0:
-                    print("Model: ", end='')
+                    print("Model: ", end="")
                 offset = len(tokenizer.decode(origin))
                 for tokens, mems in filling_stream:
                     torch.cuda.empty_cache()
                     tmp_response = tokenizer.decode(tokens[0])
                     if tmp_response[-1] != "�":
                         if get_model_parallel_rank() == 0:
-                            print(tmp_response[offset:], end='')
+                            print(tmp_response[offset:], end="")
                         offset = len(tmp_response)
                 if get_model_parallel_rank() == 0:
                     print()
@@ -117,7 +153,8 @@ if __name__ == '__main__':
 
             else:
                 output = filling_sequence(
-                    model, seq,
+                    model,
+                    seq,
                     batch_size=1,
                     strategy=strategy,
                 )[0]
@@ -127,5 +164,5 @@ if __name__ == '__main__':
                     output_list = output
 
                 response = tokenizer.decode(output_list[0])
-            history.append((query[0], response[len(tokenizer.decode(origin)):]))
+            history.append((query[0], response[len(tokenizer.decode(origin)) :]))
             print(history)

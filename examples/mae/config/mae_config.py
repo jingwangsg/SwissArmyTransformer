@@ -1,20 +1,25 @@
 import os
-pretrain_path = '/data/qingsong/pretrain'
 
-from models_mae import mae_vit_base_patch16
+pretrain_path = "/data/qingsong/pretrain"
+
 import torch
+from models_mae import mae_vit_base_patch16
+
 vit = mae_vit_base_patch16()
-checkpoint = torch.load(os.path.join(pretrain_path, 'mae_pretrain_vit_base_full.pth'), map_location="cpu")['model']
+checkpoint = torch.load(
+    os.path.join(pretrain_path, "mae_pretrain_vit_base_full.pth"), map_location="cpu"
+)["model"]
 vit.load_state_dict(checkpoint, strict=True)
 
 import argparse
+
 args = argparse.Namespace(
     num_layers=12,
     vocab_size=1,
     hidden_size=768,
     num_attention_heads=12,
-    hidden_dropout=0.,
-    attention_dropout=0.,
+    hidden_dropout=0.0,
+    attention_dropout=0.0,
     in_channels=3,
     image_size=[224, 224],
     patch_size=16,
@@ -33,5 +38,5 @@ args = argparse.Namespace(
     dec_num_layers=8,
     dec_hidden_size=512,
     dec_num_attention_heads=16,
-    load=None
-    )
+    load=None,
+)

@@ -13,23 +13,37 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
+from copy import deepcopy
+
 import torch
 from torch.optim.lr_scheduler import _LRScheduler
-import math
 
 from sat.helpers import print_rank0
-from copy import deepcopy
 
 
 class AnnealingLR(_LRScheduler):
     """Anneals the learning rate from start to zero along a cosine curve."""
 
-    DECAY_STYLES = ['linear', 'cosine', 'exponential', 'constant', 'None']
+    DECAY_STYLES = ["linear", "cosine", "exponential", "constant", "None"]
 
-    def __init__(self, optimizer, start_lr, warmup_iter, num_iters, decay_style=None, last_iter=-1, decay_ratio=0.5, auto_warmup_steps=50, auto_warmup_rate=0.05):
+    def __init__(
+        self,
+        optimizer,
+        start_lr,
+        warmup_iter,
+        num_iters,
+        decay_style=None,
+        last_iter=-1,
+        decay_ratio=0.5,
+        auto_warmup_steps=50,
+        auto_warmup_rate=0.05,
+    ):
         assert warmup_iter <= num_iters
         self.optimizer = optimizer
-        self.lr_scale = deepcopy([x['lr'] if 'lr' in x else 1. for x in optimizer.param_groups])
+        self.lr_scale = deepcopy(
+            [x["lr"] if "lr" in x else 1.0 for x in optimizer.param_groups]
+        )
         self.start_lr = start_lr
         self.warmup_iter = warmup_iter
         self.init_step = last_iter
@@ -41,23 +55,38 @@ class AnnealingLR(_LRScheduler):
         self.auto_warmup_rate = auto_warmup_rate
         self.step(self.num_iters)
         if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
-            print_rank0(f'learning rate decaying style {self.decay_style}, ratio {self.decay_ratio}')
+            print_rank0(
+                f"learning rate decaying style {self.decay_style}, ratio {self.decay_ratio}"
+            )
 
     def get_lr(self):
         if self.num_iters <= self.init_step + self.auto_warmup_steps:
             auto_lr = float(self.start_lr) * self.auto_warmup_rate
             scheduled_lr = float(self.start_lr) * self.num_iters / self.warmup_iter
             return min(auto_lr, scheduled_lr)
-        
+
         if self.warmup_iter > 0 and self.num_iters <= self.warmup_iter:
             return float(self.start_lr) * self.num_iters / self.warmup_iter
         else:
             if self.decay_style == self.DECAY_STYLES[0]:
-                return self.start_lr*((self.end_iter-(self.num_iters-self.warmup_iter))/self.end_iter)
+                return self.start_lr * (
+                    (self.end_iter - (self.num_iters - self.warmup_iter))
+                    / self.end_iter
+                )
             elif self.decay_style == self.DECAY_STYLES[1]:
-                decay_step_ratio = min(1.0, (self.num_iters - self.warmup_iter) / self.end_iter)
-                return self.start_lr / self.decay_ratio * (
-                        (math.cos(math.pi * decay_step_ratio) + 1) * (self.decay_ratio - 1) / 2 + 1)
+                decay_step_ratio = min(
+                    1.0, (self.num_iters - self.warmup_iter) / self.end_iter
+                )
+                return (
+                    self.start_lr
+                    / self.decay_ratio
+                    * (
+                        (math.cos(math.pi * decay_step_ratio) + 1)
+                        * (self.decay_ratio - 1)
+                        / 2
+                        + 1
+                    )
+                )
             elif self.decay_style == self.DECAY_STYLES[2]:
                 return self.start_lr
             else:
@@ -69,18 +98,18 @@ class AnnealingLR(_LRScheduler):
         self.num_iters = step_num
         new_lr = self.get_lr()
         for group, scale in zip(self.optimizer.param_groups, self.lr_scale):
-            group['lr'] = new_lr * scale
+            group["lr"] = new_lr * scale
 
     def state_dict(self):
         sd = {
-                'start_lr': self.start_lr,
-                'warmup_iter': self.warmup_iter,
-                'num_iters': self.num_iters,
-                'decay_style': self.decay_style,
-                'end_iter': self.end_iter,
-                'decay_ratio': self.decay_ratio
+            "start_lr": self.start_lr,
+            "warmup_iter": self.warmup_iter,
+            "num_iters": self.num_iters,
+            "decay_style": self.decay_style,
+            "end_iter": self.end_iter,
+            "decay_ratio": self.decay_ratio,
         }
         return sd
 
     def load_state_dict(self, sd):
-        pass # disable this 
+        pass  # disable this

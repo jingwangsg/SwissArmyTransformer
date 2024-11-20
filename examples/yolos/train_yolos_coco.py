@@ -6,15 +6,18 @@
 
 # here put the import lib
 import argparse
+
 import torch
+import torch.nn.functional as F
 import torchvision
 import torchvision.transforms as transforms
-import torch.nn.functional as F
-from sat import mpu, get_args
+from torchvision.transforms import ToPILImage
+from util.misc import nested_tensor_from_tensor_list
+
+from sat import get_args, mpu
 from sat.model.official.yolos_model import YOLOS
 from sat.training.deepspeed_training import training_main
-from util.misc import nested_tensor_from_tensor_list
-from torchvision.transforms import ToPILImage
+
 
 def get_batch(data_iterator, args, timers, mode):
     from datasets_.coco import make_coco_transforms
@@ -69,8 +72,9 @@ def get_batch(data_iterator, args, timers, mode):
     return image_data.cuda(), label_data
 
 
+from models.detector import PostProcess, SetCriterion
 from models.matcher import build_matcher
-from models.detector import SetCriterion, PostProcess
+
 
 def forward_step(data_iterator, model, args, timers):
     """Forward step."""

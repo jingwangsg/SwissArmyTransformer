@@ -1,14 +1,12 @@
 import torch
-from torch import nn
 import torch.nn.functional as F
+from localAttention import (similar_backward, similar_forward,
+                            weighting_backward_ori, weighting_backward_weight,
+                            weighting_forward)
+from torch import nn
 from torch.autograd import Function
-from localAttention import (similar_forward,
-                            similar_backward,
-                            weighting_forward,
-                            weighting_backward_ori,
-                            weighting_backward_weight)
 
-__all__ = ['f_similar', 'f_weighting']
+__all__ = ["f_similar", "f_weighting"]
 
 
 class similarFunction(Function):
@@ -22,14 +20,18 @@ class similarFunction(Function):
         return output
 
     @staticmethod
-    #@once_differentiable
+    # @once_differentiable
     def backward(ctx, grad_outputs):
         x_ori, x_loc = ctx.saved_tensors
         kH, kW = ctx.kHW
         casual_mask = ctx.casual_mask
         grad_outputs = grad_outputs.contiguous()
-        grad_ori = similar_backward(x_ori, x_loc, grad_outputs, kH, kW, True, casual_mask)
-        grad_loc = similar_backward(x_ori, x_loc, grad_outputs, kH, kW, False, casual_mask)
+        grad_ori = similar_backward(
+            x_ori, x_loc, grad_outputs, kH, kW, True, casual_mask
+        )
+        grad_loc = similar_backward(
+            x_ori, x_loc, grad_outputs, kH, kW, False, casual_mask
+        )
 
         return grad_ori, grad_loc, None, None, None
 
@@ -45,19 +47,21 @@ class weightingFunction(Function):
         return output
 
     @staticmethod
-    #@once_differentiable
+    # @once_differentiable
     def backward(ctx, grad_outputs):
         x_ori, x_weight = ctx.saved_tensors
         kH, kW = ctx.kHW
         casual_mask = ctx.casual_mask
         grad_outputs = grad_outputs.contiguous()
-        grad_ori = weighting_backward_ori(x_ori, x_weight, grad_outputs, kH, kW, casual_mask)
-        grad_weight = weighting_backward_weight(x_ori, x_weight, grad_outputs, kH, kW, casual_mask)
+        grad_ori = weighting_backward_ori(
+            x_ori, x_weight, grad_outputs, kH, kW, casual_mask
+        )
+        grad_weight = weighting_backward_weight(
+            x_ori, x_weight, grad_outputs, kH, kW, casual_mask
+        )
 
         return grad_ori, grad_weight, None, None, None
 
 
 f_similar = similarFunction.apply
 f_weighting = weightingFunction.apply
-
-

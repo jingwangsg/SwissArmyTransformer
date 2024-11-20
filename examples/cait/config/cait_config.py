@@ -1,24 +1,29 @@
 import os
-pretrain_path = '/data/qingsong/pretrain'
+
+pretrain_path = "/data/qingsong/pretrain"
 
 import timm
 import torch
-vit = timm.create_model('cait_s24_224', pretrained=False)
-checkpoint = torch.load(os.path.join(pretrain_path, 'S24_224.pth'), map_location="cpu")['model']
+
+vit = timm.create_model("cait_s24_224", pretrained=False)
+checkpoint = torch.load(os.path.join(pretrain_path, "S24_224.pth"), map_location="cpu")[
+    "model"
+]
 checkpoint_no_module = {}
 for k, v in checkpoint.items():
-    checkpoint_no_module[k.replace('module.', '')] = v
+    checkpoint_no_module[k.replace("module.", "")] = v
 vit.load_state_dict(checkpoint_no_module, strict=True)
 
 import argparse
+
 args = argparse.Namespace(
     init_scale=1e-5,
     num_layers=24,
     vocab_size=1,
     hidden_size=384,
     num_attention_heads=8,
-    hidden_dropout=0.,
-    attention_dropout=0.,
+    hidden_dropout=0.0,
+    attention_dropout=0.0,
     in_channels=3,
     image_size=[224, 224],
     patch_size=16,
@@ -35,5 +40,5 @@ args = argparse.Namespace(
     rank=0,
     num_classes=1000,
     dec_num_layers=2,
-    load=None
-    )
+    load=None,
+)

@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
+
 from sat.model.base_model import BaseMixin, BaseModel
+
 
 class DPREncoderFinalMixin(BaseMixin):
     def __init__(self):
@@ -9,6 +11,7 @@ class DPREncoderFinalMixin(BaseMixin):
     def final_forward(self, logits, **kwargs):
         logits = logits[:, 0, :]
         return logits
+
 
 class DPRReaderFinalMixin(BaseMixin):
     def __init__(self, hidden_size, projection_dim):
@@ -40,53 +43,68 @@ class DPRReaderFinalMixin(BaseMixin):
 
         return (start_logits, end_logits, relevance_logits)
 
+
 class DPRTypeMixin(BaseMixin):
     def __init__(self, num_types, hidden_size):
         super().__init__()
         self.type_embeddings = nn.Embedding(num_types, hidden_size)
-        
+
     def word_embedding_forward(self, input_ids, **kwargs):
         print("DPRTypeMixin word_embedding_forward")
         if "token_type_ids" in kwargs:
             token_type_ids = kwargs["token_type_ids"]
         else:
-            token_type_ids = torch.zeros(input_ids.shape, dtype=torch.long).to(input_ids.device)
-        return self.transformer.word_embeddings(input_ids) + self.type_embeddings(token_type_ids)
+            token_type_ids = torch.zeros(input_ids.shape, dtype=torch.long).to(
+                input_ids.device
+            )
+        return self.transformer.word_embeddings(input_ids) + self.type_embeddings(
+            token_type_ids
+        )
+
 
 class DPRQuestionEncoder(BaseModel):
     def __init__(self, args, transformer=None, **kwargs):
-        super(DPRQuestionEncoder, self).__init__(args, transformer=transformer, **kwargs)
+        super(DPRQuestionEncoder, self).__init__(
+            args, transformer=transformer, **kwargs
+        )
         self.add_mixin("dpr-type", DPRTypeMixin(args.num_types, args.hidden_size))
         self.add_mixin("dpr-final", DPREncoderFinalMixin())
-        
+
     @classmethod
     def add_model_specific_args(cls, parser):
-        group = parser.add_argument_group('DPRQuestionEncoder', 'DPRQuestionEncoder Configurations')
-        group.add_argument('--num-types', type=int)
+        group = parser.add_argument_group(
+            "DPRQuestionEncoder", "DPRQuestionEncoder Configurations"
+        )
+        group.add_argument("--num-types", type=int)
         return parser
+
 
 class DPRContextEncoder(BaseModel):
     def __init__(self, args, transformer=None, **kwargs):
         super(DPRContextEncoder, self).__init__(args, transformer=transformer, **kwargs)
         self.add_mixin("dpr-type", DPRTypeMixin(args.num_types, args.hidden_size))
         self.add_mixin("dpr-final", DPREncoderFinalMixin())
-        
+
     @classmethod
     def add_model_specific_args(cls, parser):
-        group = parser.add_argument_group('DPRContextEncoder', 'DPRContextEncoder Configurations')
-        group.add_argument('--num-types', type=int)
+        group = parser.add_argument_group(
+            "DPRContextEncoder", "DPRContextEncoder Configurations"
+        )
+        group.add_argument("--num-types", type=int)
         return parser
+
 
 class DPRReader(BaseModel):
     def __init__(self, args, transformer=None, **kwargs):
         super(DPRReader, self).__init__(args, transformer=transformer, **kwargs)
         self.add_mixin("dpr-type", DPRTypeMixin(args.num_types, args.hidden_size))
-        self.add_mixin("dpr-final", DPRReaderFinalMixin(args.hidden_size, args.projection_dim))
-        
+        self.add_mixin(
+            "dpr-final", DPRReaderFinalMixin(args.hidden_size, args.projection_dim)
+        )
+
     @classmethod
     def add_model_specific_args(cls, parser):
-        group = parser.add_argument_group('DPRReader', 'DPRReader Configurations')
-        group.add_argument('--num-types', type=int)
-        group.add_argument('--projection-dim', type=int)
+        group = parser.add_argument_group("DPRReader", "DPRReader Configurations")
+        group.add_argument("--num-types", type=int)
+        group.add_argument("--projection-dim", type=int)
         return parser
-    

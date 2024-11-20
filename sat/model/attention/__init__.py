@@ -1,1 +1,2 @@
-from .memory_efficient_attention import TransposedMemoryEfficientAttentionMixin, MemoryEfficientAttentionMixin
+from .memory_efficient_attention import (
+    MemoryEfficientAttentionMixin, TransposedMemoryEfficientAttentionMixin)

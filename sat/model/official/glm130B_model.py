@@ -1,14 +1,16 @@
 import math
+
 import torch
 from torch.nn import functional as F
 
 from sat import mpu
-from sat.transformer_defaults import standard_attention
-from sat.mpu.utils import split_tensor_along_last_dim, divide
+from sat.model.base_model import BaseMixin, BaseModel
+from sat.model.position_embedding import (RotaryEmbedding,
+                                          apply_rotary_pos_emb_index)
 from sat.mpu.layers import ColumnParallelLinear
-from sat.model.base_model import BaseModel, BaseMixin
-from sat.model.position_embedding import RotaryEmbedding
-from sat.model.position_embedding import apply_rotary_pos_emb_index
+from sat.mpu.utils import divide, split_tensor_along_last_dim
+from sat.transformer_defaults import standard_attention
+
 
 class RotaryEmbeddingMixin(BaseMixin):
     def __init__(
@@ -17,17 +19,21 @@ class RotaryEmbeddingMixin(BaseMixin):
         hidden_size: int,
         num_attention_heads: int,
         model_parallel_size: int,
-        position_encoding_2d: bool
+        position_encoding_2d: bool,
     ):
         super().__init__()
         hidden_size_per_attention_head = divide(hidden_size, num_attention_heads)
         self.hidden_size_per_attention_head = hidden_size_per_attention_head
-        self.num_attention_heads_per_partition = divide(num_attention_heads, model_parallel_size)
+        self.num_attention_heads_per_partition = divide(
+            num_attention_heads, model_parallel_size
+        )
         self.position_encoding_2d = position_encoding_2d
         self.rotary_emb = RotaryEmbedding(
-            hidden_size_per_attention_head // 2
-            if position_encoding_2d
-            else hidden_size_per_attention_head,
+            (
+                hidden_size_per_attention_head // 2
+                if position_encoding_2d
+                else hidden_size_per_attention_head
+            ),
             base=10000,
             precision=torch.half if fp16 else torch.float,
             learnable=False,
@@ -51,7 +57,9 @@ class RotaryEmbeddingMixin(BaseMixin):
         mixed_raw_layer = mixed_raw_layer.view(*new_tensor_shape)
 
         # [sq, b, np, hn]
-        (query_layer, key_layer, value_layer) = split_tensor_along_last_dim(mixed_raw_layer, 3)
+        (query_layer, key_layer, value_layer) = split_tensor_along_last_dim(
+            mixed_raw_layer, 3
+        )
 
         dropout_fn = attn.attention_dropout if attn.training else None
 
@@ -60,8 +68,10 @@ class RotaryEmbeddingMixin(BaseMixin):
             q1, q2 = query_layer.chunk(2, dim=(query_layer.ndim - 1))
             k1, k2 = key_layer.chunk(2, dim=(key_layer.ndim - 1))
             cos, sin = self.rotary_emb(q1, seq_len=position_ids.max() + 1)
-            position_ids, block_position_ids = position_ids[:, 0, :].transpose(0, 1).contiguous(), \
-                                               position_ids[:, 1, :].transpose(0, 1).contiguous()
+            position_ids, block_position_ids = (
+                position_ids[:, 0, :].transpose(0, 1).contiguous(),
+                position_ids[:, 1, :].transpose(0, 1).contiguous(),
+            )
             q1, k1 = apply_rotary_pos_emb_index(q1, k1, cos, sin, position_ids)
             q2, k2 = apply_rotary_pos_emb_index(q2, k2, cos, sin, block_position_ids)
             query_layer = torch.concat([q1, q2], dim=(q1.ndim - 1))
@@ -69,9 +79,13 @@ class RotaryEmbeddingMixin(BaseMixin):
         else:
             position_ids = position_ids.transpose(0, 1)
             cos, sin = self.rotary_emb(value_layer, seq_len=position_ids.max() + 1)
-            query_layer, key_layer = apply_rotary_pos_emb_index(query_layer, key_layer, cos, sin, position_ids)
+            query_layer, key_layer = apply_rotary_pos_emb_index(
+                query_layer, key_layer, cos, sin, position_ids
+            )
 
-        context_layer = attention_fn(query_layer, key_layer, value_layer, mask, dropout_fn, **kw_args)
+        context_layer = attention_fn(
+            query_layer, key_layer, value_layer, mask, dropout_fn, **kw_args
+        )
 
         output = attn.dense(context_layer)
 
@@ -158,7 +172,7 @@ class SelfAttentionWithFP32SoftmaxMixin(BaseMixin):
             self.scale_mask_softmax = FusedScaleMaskSoftmax(
                 input_in_fp16=True,
                 input_in_bf16=False,
-                attn_mask_type=1, # AttnMaskType.padding,
+                attn_mask_type=1,  # AttnMaskType.padding,
                 scaled_masked_softmax_fusion=True,
                 mask_func=self.attention_mask_func,
                 softmax_in_fp32=True,
@@ -201,24 +215,38 @@ class SelfAttentionWithFP32SoftmaxMixin(BaseMixin):
         if mem is not None:  # the first time, mem is None
             # might change batch_size
             # b, seqlen, stack, head, hidden -> stack, seqlen, b, head, hidden
-            mem = mem.expand(b, -1, -1).reshape(b, mem.shape[1], 2, nh, hidden_size).permute(2, 1, 0, 3, 4)
+            mem = (
+                mem.expand(b, -1, -1)
+                .reshape(b, mem.shape[1], 2, nh, hidden_size)
+                .permute(2, 1, 0, 3, 4)
+            )
             memk, memv = mem[0], mem[1]
             key_layer = torch.cat((memk, key_layer), dim=0)
             value_layer = torch.cat((memv, value_layer), dim=0)
 
         query_key_layer_scaling_coeff = float(kwargs["layer_id"] + 1)
         if scaling_attention_score:
-            query_layer = query_layer / (math.sqrt(self.hidden_size_per_attention_head) * query_key_layer_scaling_coeff)
+            query_layer = query_layer / (
+                math.sqrt(self.hidden_size_per_attention_head)
+                * query_key_layer_scaling_coeff
+            )
 
         # ===================================
         # Raw attention scores. [b, np, s, s]
         # ===================================
 
         # [b, np, sq, sk]
-        output_size = (query_layer.size(1), query_layer.size(2), query_layer.size(0), key_layer.size(0))
+        output_size = (
+            query_layer.size(1),
+            query_layer.size(2),
+            query_layer.size(0),
+            key_layer.size(0),
+        )
 
         # [sq, b, np, hn] -> [sq, b * np, hn]
-        query_layer = query_layer.view(output_size[2], output_size[0] * output_size[1], -1)
+        query_layer = query_layer.view(
+            output_size[2], output_size[0] * output_size[1], -1
+        )
         # [sk, b, np, hn] -> [sk, b * np, hn]
         key_layer = key_layer.view(output_size[3], output_size[0] * output_size[1], -1)
 
@@ -246,7 +274,9 @@ class SelfAttentionWithFP32SoftmaxMixin(BaseMixin):
 
         if self.scale_mask_softmax:
             self.scale_mask_softmax.scale = query_key_layer_scaling_coeff
-            attention_probs = self.scale_mask_softmax(attention_scores, attention_mask.contiguous())
+            attention_probs = self.scale_mask_softmax(
+                attention_scores, attention_mask.contiguous()
+            )
         else:
             if not (attention_mask.shape[-2] == 1 and (attention_mask > 0).all()):
                 # if auto-regressive, skip
@@ -274,13 +304,22 @@ class SelfAttentionWithFP32SoftmaxMixin(BaseMixin):
         # [sk, b, np, hn] --> [b, np, sq, hn]
 
         # context layer shape: [b, np, sq, hn]
-        output_size = (value_layer.size(1), value_layer.size(2), query_layer.size(0), value_layer.size(3))
+        output_size = (
+            value_layer.size(1),
+            value_layer.size(2),
+            query_layer.size(0),
+            value_layer.size(3),
+        )
 
         # change view [sk, b * np, hn]
-        value_layer = value_layer.view(value_layer.size(0), output_size[0] * output_size[1], -1)
+        value_layer = value_layer.view(
+            value_layer.size(0), output_size[0] * output_size[1], -1
+        )
 
         # change view [b * np, sq, sk]
-        attention_probs = attention_probs.view(output_size[0] * output_size[1], output_size[2], -1)
+        attention_probs = attention_probs.view(
+            output_size[0] * output_size[1], output_size[2], -1
+        )
 
         # matmul: [b * np, sq, hn]
         context_layer = torch.bmm(attention_probs, value_layer.transpose(0, 1))
@@ -292,7 +331,9 @@ class SelfAttentionWithFP32SoftmaxMixin(BaseMixin):
         context_layer = context_layer.permute(2, 0, 1, 3).contiguous()
 
         # [sq, b, np, hn] --> [sq, b, hp]
-        new_context_layer_shape = context_layer.size()[:-2] + (self.hidden_size_per_partition,)
+        new_context_layer_shape = context_layer.size()[:-2] + (
+            self.hidden_size_per_partition,
+        )
         context_layer = context_layer.view(*new_context_layer_shape)
 
         return context_layer
@@ -303,7 +344,11 @@ class FinalForwardMixin(BaseMixin):
         super().__init__()
 
     def final_forward(self, logits, **kw_args):
-        return F.linear(logits, self.transformer.word_embeddings.weight).transpose(0, 1).contiguous()
+        return (
+            F.linear(logits, self.transformer.word_embeddings.weight)
+            .transpose(0, 1)
+            .contiguous()
+        )
 
 
 class NonePositionEmbedding(BaseMixin):
@@ -334,10 +379,17 @@ class GLM130B(BaseModel):
             params_dtype=torch.half if args.fp16 else torch.float,
             transformer=transformer,
         )
-        self.add_mixin("glu-deepnorm", DeepNormWithGLUMixin(args.num_layers, args.hidden_size, args.inner_hidden_size))
+        self.add_mixin(
+            "glu-deepnorm",
+            DeepNormWithGLUMixin(
+                args.num_layers, args.hidden_size, args.inner_hidden_size
+            ),
+        )
         self.add_mixin(
             "fp32-softmax",
-            SelfAttentionWithFP32SoftmaxMixin(args.hidden_size, args.num_attention_heads, args.model_parallel_size),
+            SelfAttentionWithFP32SoftmaxMixin(
+                args.hidden_size, args.num_attention_heads, args.model_parallel_size
+            ),
         )
         self.add_mixin("final-forward", FinalForwardMixin())
         self.add_mixin("non-position-embedding", NonePositionEmbedding())
@@ -350,7 +402,7 @@ class GLM130B(BaseModel):
                 args.hidden_size,
                 args.num_attention_heads,
                 args.model_parallel_size,
-                args.position_encoding_2d
+                args.position_encoding_2d,
             ),
         )
         if not args.no_glu:
@@ -358,5 +410,9 @@ class GLM130B(BaseModel):
 
     @classmethod
     def add_model_specific_args(cls, parser):
-        parser.add_argument('--position-encoding-2d', action='store_true', help='Use 2D rotary embedding.')
-        parser.add_argument('--no-glu', action='store_true', help='Disable GLU.')
+        parser.add_argument(
+            "--position-encoding-2d",
+            action="store_true",
+            help="Use 2D rotary embedding.",
+        )
+        parser.add_argument("--no-glu", action="store_true", help="Disable GLU.")

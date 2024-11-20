@@ -1,52 +1,78 @@
-import math
 import copy
+import math
 import os
-import warnings
 import re
 import sys
+import warnings
+
 from transformers.utils import logging
+
 logger = logging.get_logger(__name__)
+
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
 from transformers import GenerationMixin
-from sat import AutoModel
-from typing import Optional, Tuple, Union, List, Callable, Dict, Any
-from transformers.generation.utils import LogitsProcessorList, StoppingCriteriaList, GenerationConfig, ModelOutput
-from transformers.modeling_outputs import (
-    CausalLMOutputWithPast,
-)
 from transformers.generation.logits_process import LogitsProcessor
+from transformers.generation.utils import (GenerationConfig,
+                                           LogitsProcessorList, ModelOutput,
+                                           StoppingCriteriaList)
+from transformers.modeling_outputs import CausalLMOutputWithPast
+
+from sat import AutoModel
+
+
 class InvalidScoreLogitsProcessor(LogitsProcessor):
-    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
+    def __call__(
+        self, input_ids: torch.LongTensor, scores: torch.FloatTensor
+    ) -> torch.FloatTensor:
         if torch.isnan(scores).any() or torch.isinf(scores).any():
             scores.zero_()
             scores[..., 20005] = 5e4
         return scores
 
+
 from transformers import AutoConfig
+
 
 class ChatModel(nn.Module, GenerationMixin):
     def __init__(self, args, model=None):
         super().__init__()
         self.position_encoding_2d = True
-        self.config = AutoConfig.from_pretrained('THUDM/chatglm-6b', trust_remote_code=True)
+        self.config = AutoConfig.from_pretrained(
+            "THUDM/chatglm-6b", trust_remote_code=True
+        )
         self.generation_config = GenerationConfig.from_model_config(self.config)
         if model is None:
             self.model, self.args = AutoModel.from_pretrained("chatglm-6b", args)
         else:
             self.model, self.args = model, args
         self.device = self.model.parameters().__next__().device
-        self.main_input_name = 'input_ids'
-    
+        self.main_input_name = "input_ids"
+
     @classmethod
-    def from_pretrained(cls, name, args=None, base_cls=None, *, home_path=None, url=None, prefix='', **kwargs):
+    def from_pretrained(
+        cls,
+        name,
+        args=None,
+        base_cls=None,
+        *,
+        home_path=None,
+        url=None,
+        prefix="",
+        **kwargs
+    ):
         if base_cls is None:
-            model, args = AutoModel.from_pretrained(name, args, home_path=home_path, url=url, prefix=prefix, **kwargs)
+            model, args = AutoModel.from_pretrained(
+                name, args, home_path=home_path, url=url, prefix=prefix, **kwargs
+            )
         else:
-            model, args = base_cls.from_pretrained(name, args, home_path=home_path, url=url, prefix=prefix, **kwargs)
+            model, args = base_cls.from_pretrained(
+                name, args, home_path=home_path, url=url, prefix=prefix, **kwargs
+            )
         return cls(args, model), args
-    
+
     def can_generate(self):
         return True
 
@@ -67,7 +93,12 @@ class ChatModel(nn.Module, GenerationMixin):
             attention_mask = model_kwargs["attention_mask"]
             if attention_mask is not None and attention_mask.dtype == torch.bool:
                 attention_mask = torch.cat(
-                    [attention_mask, attention_mask.new_ones((*attention_mask.shape[:3], 1))], dim=3)
+                    [
+                        attention_mask,
+                        attention_mask.new_ones((*attention_mask.shape[:3], 1)),
+                    ],
+                    dim=3,
+                )
                 new_attention_mask = attention_mask[:, :, -1:].clone()
                 new_attention_mask[..., -1] = False
                 model_kwargs["attention_mask"] = torch.cat(
@@ -86,13 +117,13 @@ class ChatModel(nn.Module, GenerationMixin):
         return model_kwargs
 
     def prepare_inputs_for_generation(
-            self,
-            input_ids: torch.LongTensor,
-            past: Optional[torch.Tensor] = None,
-            past_key_values: Optional[torch.Tensor] = None,
-            attention_mask: Optional[torch.Tensor] = None,
-            position_ids: Optional[torch.Tensor] = None,
-            **kwargs
+        self,
+        input_ids: torch.LongTensor,
+        past: Optional[torch.Tensor] = None,
+        past_key_values: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
+        **kwargs
     ) -> dict:
         if past is None:
             past = past_key_values
@@ -103,16 +134,16 @@ class ChatModel(nn.Module, GenerationMixin):
             "input_ids": input_ids,
             "position_ids": position_ids,
             "attention_mask": attention_mask,
-            "past_key_values": past
+            "past_key_values": past,
         }
 
     def forward(
-            self,
-            input_ids: Optional[torch.Tensor] = None,
-            position_ids: Optional[torch.Tensor] = None,
-            attention_mask: Optional[torch.Tensor] = None,
-            past_key_values: Optional[Tuple[torch.FloatTensor]] = None,
-            **kw_args
+        self,
+        input_ids: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        past_key_values: Optional[Tuple[torch.FloatTensor]] = None,
+        **kw_args
     ):
         outputs = self.model(
             input_ids=input_ids,
@@ -122,16 +153,13 @@ class ChatModel(nn.Module, GenerationMixin):
         )
 
         lm_logits = outputs[0]
-        past_key_values = [x['past_key_values'] for x in outputs[1:]]
+        past_key_values = [x["past_key_values"] for x in outputs[1:]]
 
-        return CausalLMOutputWithPast(
-            logits=lm_logits,
-            past_key_values=past_key_values
-        )
+        return CausalLMOutputWithPast(logits=lm_logits, past_key_values=past_key_values)
 
     @staticmethod
     def _reorder_cache(
-            past: Tuple[Tuple[torch.Tensor, torch.Tensor], ...], beam_idx: torch.LongTensor
+        past: Tuple[Tuple[torch.Tensor, torch.Tensor], ...], beam_idx: torch.LongTensor
     ) -> Tuple[Tuple[torch.Tensor, torch.Tensor], ...]:
         """
         This function is used to re-order the `past_key_values` cache if [`~PreTrainedModel.beam_search`] or
@@ -158,20 +186,42 @@ class ChatModel(nn.Module, GenerationMixin):
             ["\?", "？"],
         ]
         for item in punkts:
-            response = re.sub(r"([\u4e00-\u9fff])%s" % item[0], r"\1%s" % item[1], response)
-            response = re.sub(r"%s([\u4e00-\u9fff])" % item[0], r"%s\1" % item[1], response)
+            response = re.sub(
+                r"([\u4e00-\u9fff])%s" % item[0], r"\1%s" % item[1], response
+            )
+            response = re.sub(
+                r"%s([\u4e00-\u9fff])" % item[0], r"%s\1" % item[1], response
+            )
         return response
 
     @torch.no_grad()
-    def chat(self, tokenizer, query: str, history: List[Tuple[str, str]] = None, max_length: int = 2048, num_beams=1,
-             do_sample=True, top_p=0.7, temperature=0.95, logits_processor=None, **kwargs):
+    def chat(
+        self,
+        tokenizer,
+        query: str,
+        history: List[Tuple[str, str]] = None,
+        max_length: int = 2048,
+        num_beams=1,
+        do_sample=True,
+        top_p=0.7,
+        temperature=0.95,
+        logits_processor=None,
+        **kwargs
+    ):
         if history is None:
             history = []
         if logits_processor is None:
             logits_processor = LogitsProcessorList()
         logits_processor.append(InvalidScoreLogitsProcessor())
-        gen_kwargs = {"max_length": max_length, "num_beams": num_beams, "do_sample": do_sample, "top_p": top_p,
-                      "temperature": temperature, "logits_processor": logits_processor, **kwargs}
+        gen_kwargs = {
+            "max_length": max_length,
+            "num_beams": num_beams,
+            "do_sample": do_sample,
+            "top_p": top_p,
+            "temperature": temperature,
+            "logits_processor": logits_processor,
+            **kwargs,
+        }
         if not history:
             prompt = query
         else:
@@ -182,19 +232,34 @@ class ChatModel(nn.Module, GenerationMixin):
         inputs = tokenizer([prompt], return_tensors="pt")
         inputs = inputs.to(self.device)
         outputs = self.generate(**inputs, **gen_kwargs)
-        outputs = outputs.tolist()[0][len(inputs["input_ids"][0]):]
+        outputs = outputs.tolist()[0][len(inputs["input_ids"][0]) :]
         response = tokenizer.decode(outputs)
         response = self.process_response(response)
         history = history + [(query, response)]
         return response, history
-    
+
     @torch.no_grad()
-    def batch_generate(self, tokenizer, queries, max_length: int = 2048, num_beams=1,
-             do_sample=True, top_p=0.7, temperature=0.95, **kwargs):
-        gen_kwargs = {"max_length": max_length, "num_beams": num_beams, "do_sample": do_sample, "top_p": top_p,
-                      "temperature": temperature, **kwargs}
+    def batch_generate(
+        self,
+        tokenizer,
+        queries,
+        max_length: int = 2048,
+        num_beams=1,
+        do_sample=True,
+        top_p=0.7,
+        temperature=0.95,
+        **kwargs
+    ):
+        gen_kwargs = {
+            "max_length": max_length,
+            "num_beams": num_beams,
+            "do_sample": do_sample,
+            "top_p": top_p,
+            "temperature": temperature,
+            **kwargs,
+        }
         inputs = tokenizer(queries, return_tensors="pt", padding=True)
-        inputs = {k:v.to(self.device) for k, v in inputs.items()}
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
         outputs = self.generate(**inputs, **gen_kwargs)
         texts = tokenizer.batch_decode(outputs, skip_special_tokens=True)
         return texts

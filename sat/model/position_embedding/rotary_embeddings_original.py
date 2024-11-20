@@ -1,18 +1,29 @@
 import torch
 import torch.nn as nn
 
+
 class RotaryEmbedding(nn.Module):
-    def __init__(self, dim, original_impl=False, device=None, dtype=None, base_scale=1.):
+    def __init__(
+        self, dim, original_impl=False, device=None, dtype=None, base_scale=1.0
+    ):
         super().__init__()
         self.base_scale = base_scale
-        inv_freq = 1.0 / ((10000*base_scale) ** (torch.arange(0, dim, 2, device=device).to(dtype=dtype) / dim))
+        inv_freq = 1.0 / (
+            (10000 * base_scale)
+            ** (torch.arange(0, dim, 2, device=device).to(dtype=dtype) / dim)
+        )
         self.register_buffer("inv_freq", inv_freq)
         self.dim = dim
         self.original_impl = original_impl
         self.cache = None
 
     def forward_impl(
-            self, seq_len: int, n_elem: int, dtype: torch.dtype, device: torch.device, base: int = 10000
+        self,
+        seq_len: int,
+        n_elem: int,
+        dtype: torch.dtype,
+        device: torch.device,
+        base: int = 10000,
     ):
         """Enhanced Transformer with Rotary Position Embedding.
 
@@ -24,7 +35,10 @@ class RotaryEmbedding(nn.Module):
         if n_elem == self.dim:
             theta = self.inv_freq
         else:
-            theta = 1.0 / ((base*self.base_scale) ** (torch.arange(0, n_elem, 2, dtype=dtype, device=device) / n_elem))
+            theta = 1.0 / (
+                (base * self.base_scale)
+                ** (torch.arange(0, n_elem, 2, dtype=dtype, device=device) / n_elem)
+            )
 
         # Create position indexes `[0, 1, ..., seq_len - 1]`
         seq_idx = torch.arange(seq_len, dtype=torch.float32, device=device)
@@ -44,7 +58,10 @@ class RotaryEmbedding(nn.Module):
         if self.cache is not None and max_seq_len <= self.cache.shape[0]:
             return self.cache[:max_seq_len]
         return self.forward_impl(
-            max_seq_len, self.dim, dtype=self.inv_freq.dtype, device=self.inv_freq.device
+            max_seq_len,
+            self.dim,
+            dtype=self.inv_freq.dtype,
+            device=self.inv_freq.device,
         )
 
 
@@ -68,6 +85,7 @@ def apply_rotary_pos_emb(x: torch.Tensor, rope_cache: torch.Tensor) -> torch.Ten
     x_out2 = x_out2.flatten(3)
     return torch.cat((x_out2, x_pass), dim=-1)
 
+
 @torch.jit.script
 def apply_rotary_pos_emb_bhs(x: torch.Tensor, rope_cache: torch.Tensor) -> torch.Tensor:
     # x: [b, np, sq, hn]
@@ -75,7 +93,7 @@ def apply_rotary_pos_emb_bhs(x: torch.Tensor, rope_cache: torch.Tensor) -> torch
     rot_dim = rope_cache.shape[-2] * 2
     x, x_pass = x[..., :rot_dim], x[..., rot_dim:]
     # truncate to support variable sizes
-    rope_cache = rope_cache[:,:sq]
+    rope_cache = rope_cache[:, :sq]
     xshaped = x.reshape(-1, np, sq, rot_dim // 2, 2)
     rope_cache = rope_cache.view(-1, 1, sq, xshaped.size(3), 2)
     x_out2 = torch.stack(

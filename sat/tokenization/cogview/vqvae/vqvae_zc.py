@@ -35,18 +35,18 @@ class Quantize(nn.Module):
         self.eps = eps
 
         embed = torch.randn(dim, n_embed)
-        torch.nn.init.xavier_uniform_(embed, gain=torch.nn.init.calculate_gain('tanh'))
+        torch.nn.init.xavier_uniform_(embed, gain=torch.nn.init.calculate_gain("tanh"))
         self.register_buffer("embed", embed)
         self.register_buffer("cluster_size", torch.zeros(n_embed))
         self.register_buffer("embed_avg", embed.clone())
 
-    def forward_(self, input, continuous_relax=False, temperature=1., hard=False):
+    def forward_(self, input, continuous_relax=False, temperature=1.0, hard=False):
         flatten = input.reshape(-1, self.dim)
         dist = (
             flatten.pow(2).sum(1, keepdim=True)
             - 2 * flatten @ self.embed
             + self.embed.pow(2).sum(0, keepdim=True)
-        ) # dist map, shape=[*, n_embed]
+        )  # dist map, shape=[*, n_embed]
 
         if not continuous_relax:
             # argmax + lookup
@@ -89,8 +89,10 @@ class Quantize(nn.Module):
         else:
             # maybe need replace a KL term here
             qy = (-dist).softmax(-1)
-            diff = torch.sum(qy * torch.log(qy * self.n_embed + 1e-20), dim=-1).mean() # KL
-            #diff = (quantize - input).pow(2).mean().detach() # gumbel softmax do not need diff
+            diff = torch.sum(
+                qy * torch.log(qy * self.n_embed + 1e-20), dim=-1
+            ).mean()  # KL
+            # diff = (quantize - input).pow(2).mean().detach() # gumbel softmax do not need diff
             quantize = quantize.to(memory_format=torch.channels_last)
         return quantize, diff, embed_ind
 
@@ -117,9 +119,19 @@ class ResBlock(nn.Module):
 
 
 class Encoder(nn.Module):
-    def __init__(self, in_channel, channel, n_res_block, n_res_channel, stride, embed_dim, n_embed, simple):
+    def __init__(
+        self,
+        in_channel,
+        channel,
+        n_res_block,
+        n_res_channel,
+        stride,
+        embed_dim,
+        n_embed,
+        simple,
+    ):
         super().__init__()
-        
+
         if stride == 6:
             if simple:
                 blocks = [
@@ -133,12 +145,11 @@ class Encoder(nn.Module):
                 blocks = [
                     nn.Conv2d(in_channel, channel // 4, 4, stride=2, padding=1),
                     nn.ReLU(inplace=True),
-                    nn.Conv2d(channel // 4, channel //2, 4, stride=2, padding=1),
+                    nn.Conv2d(channel // 4, channel // 2, 4, stride=2, padding=1),
                     nn.ReLU(inplace=True),
-                    nn.Conv2d(channel //2, channel, 4, stride=2, padding=1),
+                    nn.Conv2d(channel // 2, channel, 4, stride=2, padding=1),
                 ]
 
-            
         elif stride == 4:
             blocks = [
                 nn.Conv2d(in_channel, channel // 2, 4, stride=2, padding=1),
@@ -168,13 +179,20 @@ class Encoder(nn.Module):
 
 class Decoder(nn.Module):
     def __init__(
-        self, in_channel, out_channel, channel, n_res_block, n_res_channel, stride, simple
+        self,
+        in_channel,
+        out_channel,
+        channel,
+        n_res_block,
+        n_res_channel,
+        stride,
+        simple,
     ):
         super().__init__()
         blocks = [
             nn.ConvTranspose2d(in_channel, channel, 4, stride=2, padding=1),
         ]
-        
+
         for i in range(n_res_block):
             blocks.append(ResBlock(channel, n_res_channel))
 
@@ -185,11 +203,9 @@ class Decoder(nn.Module):
                 [
                     nn.ConvTranspose2d(channel, channel, 4, stride=2, padding=1),
                     nn.ReLU(inplace=True),
-                    nn.ConvTranspose2d(
-                        channel, channel, 4, stride=2, padding=1
-                    ),
+                    nn.ConvTranspose2d(channel, channel, 4, stride=2, padding=1),
                     nn.ReLU(inplace=True),
-                    nn.Conv2d(channel, out_channel, 1)
+                    nn.Conv2d(channel, out_channel, 1),
                 ]
             )
         elif stride == 4:
@@ -229,42 +245,63 @@ class VQVAE(nn.Module):
         simple=True,
         decay=0.99,
         dif=False,
-        ddconfig=None
+        ddconfig=None,
     ):
         super().__init__()
         if channel == 2048:
             n_res_block = 0
-        self.enc_b = Encoder(in_channel, channel, n_res_block, n_res_channel, stride, embed_dim, n_embed, simple)
+        self.enc_b = Encoder(
+            in_channel,
+            channel,
+            n_res_block,
+            n_res_channel,
+            stride,
+            embed_dim,
+            n_embed,
+            simple,
+        )
         self.quantize_t = Quantize(embed_dim, n_embed)
         if dif:
             self.dec = DifDecoder(**ddconfig)
         else:
             self.dec = Decoder(
-                in_channel=embed_dim, 
+                in_channel=embed_dim,
                 out_channel=in_channel,
                 channel=channel,
                 n_res_block=n_res_block,
                 n_res_channel=n_res_channel,
-                stride=stride-2,
-                simple=simple
+                stride=stride - 2,
+                simple=simple,
             )
-         
-    def forward(self, input, continuous_relax=False, temperature=1., hard=False, KL=False):
-        quant_t, diff, _, = self.encode(input, continuous_relax, temperature, hard, KL)
+
+    def forward(
+        self, input, continuous_relax=False, temperature=1.0, hard=False, KL=False
+    ):
+        (
+            quant_t,
+            diff,
+            _,
+        ) = self.encode(input, continuous_relax, temperature, hard, KL)
         dec = self.dec(quant_t)
 
         return dec, diff
 
-    def encode(self, input, continuous_relax=False, temperature=1., hard=False, KL=False):
+    def encode(
+        self, input, continuous_relax=False, temperature=1.0, hard=False, KL=False
+    ):
         logits = self.enc_b(input)
-        quant_t, diff_t, id_t = self.quantize_t.forward_(logits, continuous_relax, temperature, hard)
+        quant_t, diff_t, id_t = self.quantize_t.forward_(
+            logits, continuous_relax, temperature, hard
+        )
         quant_t = quant_t.permute(0, 3, 1, 2)
         if not continuous_relax or KL:
             diff_t = diff_t.unsqueeze(0)
         else:
-            diff_t = torch.zeros_like(diff_t).unsqueeze(0) # placeholder to return right shape 
-        return quant_t, diff_t , id_t
-    
+            diff_t = torch.zeros_like(diff_t).unsqueeze(
+                0
+            )  # placeholder to return right shape
+        return quant_t, diff_t, id_t
+
     def decode(self, code):
         return self.dec(code)
 
@@ -276,10 +313,10 @@ class VQVAE(nn.Module):
         return dec
 
 
-
 import torch
+
 try:
-    from torch.overrides import has_torch_function, handle_torch_function
+    from torch.overrides import handle_torch_function, has_torch_function
 except ImportError as e:
     from torch._overrides import has_torch_function, handle_torch_function
 
@@ -332,18 +369,25 @@ def gumbel_softmax(logits, tau=1, hard=False, eps=1e-10, dim=-1):
     if not torch.jit.is_scripting():
         if type(logits) is not Tensor and has_torch_function((logits,)):
             return handle_torch_function(
-                gumbel_softmax, (logits,), logits, tau=tau, hard=hard, eps=eps, dim=dim)
+                gumbel_softmax, (logits,), logits, tau=tau, hard=hard, eps=eps, dim=dim
+            )
     if eps != 1e-10:
         warnings.warn("`eps` parameter is deprecated and has no effect.")
 
-    gumbels = -torch.empty_like(logits, memory_format=torch.legacy_contiguous_format).exponential_().log()  # ~Gumbel(0,1)
+    gumbels = (
+        -torch.empty_like(logits, memory_format=torch.legacy_contiguous_format)
+        .exponential_()
+        .log()
+    )  # ~Gumbel(0,1)
     gumbels = (logits + gumbels) / tau  # ~Gumbel(logits,tau)
     y_soft = gumbels.softmax(dim)
 
     if hard:
         # Straight through.
         index = y_soft.max(dim, keepdim=True)[1]
-        y_hard = torch.zeros_like(logits, memory_format=torch.legacy_contiguous_format).scatter_(dim, index, 1.0)
+        y_hard = torch.zeros_like(
+            logits, memory_format=torch.legacy_contiguous_format
+        ).scatter_(dim, index, 1.0)
         ret = y_hard - y_soft.detach() + y_soft
         return ret, index
     else:

@@ -1,28 +1,33 @@
 import os
-pretrain_path = '/data/qingsong/pretrain'
+
+pretrain_path = "/data/qingsong/pretrain"
 
 import torch
 from models.detector import Detector
+
 yolos = Detector(
-        num_classes=91,
-        pre_trained=None,
-        det_token_num=100,
-        backbone_name='tiny',
-        init_pe_size=[800, 1333],
-        mid_pe_size=None,
-        use_checkpoint=False,
-    )
-yolos.load_state_dict(torch.load(os.path.join(pretrain_path, 'yolos_ti.pth'))['model'], strict=False)
+    num_classes=91,
+    pre_trained=None,
+    det_token_num=100,
+    backbone_name="tiny",
+    init_pe_size=[800, 1333],
+    mid_pe_size=None,
+    use_checkpoint=False,
+)
+yolos.load_state_dict(
+    torch.load(os.path.join(pretrain_path, "yolos_ti.pth"))["model"], strict=False
+)
 
 import argparse
+
 args = argparse.Namespace(
     num_layers=12,
     vocab_size=101,
     num_det_tokens=100,
     hidden_size=192,
     num_attention_heads=3,
-    hidden_dropout=0.,
-    attention_dropout=0.,
+    hidden_dropout=0.0,
+    attention_dropout=0.0,
     in_channels=3,
     image_size=[800, 1333],
     patch_size=16,
@@ -39,6 +44,6 @@ args = argparse.Namespace(
     rank=0,
     load=None,
     num_classes=1000,
-    mode='inference',
-    num_det_classes=92
-    )
+    mode="inference",
+    num_det_classes=92,
+)

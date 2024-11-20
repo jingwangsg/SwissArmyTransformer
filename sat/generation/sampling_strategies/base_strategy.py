@@ -1,19 +1,24 @@
 # -*- encoding: utf-8 -*-
-'''
+"""
 @File    :   base_strategy.py
 @Time    :   2021/10/08 22:22:42
 @Author  :   Ming Ding 
 @Contact :   dm18@mails.tsinghua.edu.cn
-'''
+"""
 
+import math
 # here put the import lib
 import os
-import sys
-import math
 import random
+import sys
+
 import torch
 import torch.nn.functional as F
-from sat.mpu.initialize import get_model_parallel_world_size, get_model_parallel_src_rank, get_model_parallel_group
+
+from sat.mpu.initialize import (get_model_parallel_group,
+                                get_model_parallel_src_rank,
+                                get_model_parallel_world_size)
+
 
 def top_k_logits(logits, top_k=0, top_p=0.0, filter_value=-65504):
     # This function has been mostly taken from huggingface conversational ai code at
@@ -24,7 +29,7 @@ def top_k_logits(logits, top_k=0, top_p=0.0, filter_value=-65504):
         indices_to_remove = logits < torch.topk(logits, top_k)[0][..., -1, None]
         logits[indices_to_remove] = filter_value
 
-    # if top_p > 0.0:
+        # if top_p > 0.0:
         # convert to 1D
         # logits = logits.view(logits.size()[1])
         logits = logits.contiguous()
@@ -51,7 +56,16 @@ def top_k_logits(logits, top_k=0, top_p=0.0, filter_value=-65504):
 
 
 class BaseStrategy:
-    def __init__(self, invalid_slices=[], temperature=1., top_k=200, eps=1e-4, top_p=0.0,  repetition_penalty=1., end_tokens=None):
+    def __init__(
+        self,
+        invalid_slices=[],
+        temperature=1.0,
+        top_k=200,
+        eps=1e-4,
+        top_p=0.0,
+        repetition_penalty=1.0,
+        end_tokens=None,
+    ):
         self.repetition_penalty = repetition_penalty
         self.invalid_slices = invalid_slices
         self.temperature = temperature
@@ -75,14 +89,20 @@ class BaseStrategy:
             temperature = self.temperature
         if torch.isnan(logits).any():
             if nan_default_token is None:
-                raise ValueError('nan in logits, set nan_default_token to proceed in BaseStrategy.forward.')
+                raise ValueError(
+                    "nan in logits, set nan_default_token to proceed in BaseStrategy.forward."
+                )
             logits.fill_(-1000)
             logits[..., nan_default_token] = 0
         # apply repetition penalty
         penalty_mat = torch.ones_like(logits).float()
-        if tokens.shape[-1]> self.context_length:
-            penalty_mat.scatter_(1, 
-            tokens[:, self.context_length:], torch.ones_like(tokens[:, self.context_length:]).float() * self.repetition_penalty)
+        if tokens.shape[-1] > self.context_length:
+            penalty_mat.scatter_(
+                1,
+                tokens[:, self.context_length :],
+                torch.ones_like(tokens[:, self.context_length :]).float()
+                * self.repetition_penalty,
+            )
         penalty_mat *= temperature
         logits = logits.float() / penalty_mat
 
@@ -92,7 +112,9 @@ class BaseStrategy:
         probs = F.softmax(logits, dim=-1)  # float is essetial, due to a bug in Pytorch
         pred = torch.multinomial(probs, num_samples=1)
         if get_model_parallel_world_size() > 1:
-            torch.distributed.broadcast(pred, get_model_parallel_src_rank(), group=get_model_parallel_group())
+            torch.distributed.broadcast(
+                pred, get_model_parallel_src_rank(), group=get_model_parallel_group()
+            )
         if pred.numel() == 1 and pred.item() in self.end_tokens:
             self._is_done = True
         tokens = torch.cat((tokens, pred.view(tokens.shape[0], 1)), dim=1)

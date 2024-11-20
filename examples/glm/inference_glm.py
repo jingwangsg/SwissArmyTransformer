@@ -1,33 +1,32 @@
 # -*- encoding: utf-8 -*-
-'''
+"""
 @File    :   inference_glm.py
 @Time    :   2021/10/22 19:41:58
 @Author  :   Ming Ding
 @Contact :   dm18@mails.tsinghua.edu.cn
-'''
+"""
 
-# here put the import lib
-from functools import partial
+import argparse
 import os
-import sys
 import random
+import stat
+import sys
 import time
 from datetime import datetime
-import torch
-import torch.nn.functional as F
-import argparse
-import stat
+# here put the import lib
 from functools import partial
 
-from sat import mpu, get_args, get_tokenizer
+import torch
+import torch.nn.functional as F
 
+from sat import get_args, get_tokenizer, mpu
 from sat.arguments import initialize_distributed, set_random_seed
-
+from sat.generation.autoregressive_sampling import (evaluate_perplexity,
+                                                    filling_sequence)
+from sat.generation.sampling_strategies import BaseStrategy, BeamSearchStrategy
+from sat.generation.utils import generate_continually, timed_name
 from sat.model import GLMModel
 from sat.model.mixins import CachedAutoregressiveMixin
-from sat.generation.autoregressive_sampling import filling_sequence, evaluate_perplexity
-from sat.generation.sampling_strategies import BeamSearchStrategy, BaseStrategy
-from sat.generation.utils import timed_name, generate_continually
 
 
 def get_masks_and_position_ids_glm(seq, mask_position, context_length):
@@ -55,29 +54,38 @@ def main(model, args):
     set_random_seed(args.seed)
     model.eval()
 
-    end_tokens = [tokenizer.get_command('eop').Id, tokenizer.get_command('eos').Id]
+    end_tokens = [tokenizer.get_command("eop").Id, tokenizer.get_command("eos").Id]
     # define function for each query
-    if args.sampling_strategy == 'BaseStrategy':
-        strategy = BaseStrategy(temperature=args.temperature, top_k=args.top_k,end_tokens=end_tokens)
-    elif args.sampling_strategy == 'BeamSearchStrategy':
-        strategy = BeamSearchStrategy(args.batch_size, length_penalty=args.length_penalty, consider_end=True, end_tokens=end_tokens, no_repeat_ngram_size=args.no_repeat_ngram_size, min_tgt_length=args.min_tgt_length)
+    if args.sampling_strategy == "BaseStrategy":
+        strategy = BaseStrategy(
+            temperature=args.temperature, top_k=args.top_k, end_tokens=end_tokens
+        )
+    elif args.sampling_strategy == "BeamSearchStrategy":
+        strategy = BeamSearchStrategy(
+            args.batch_size,
+            length_penalty=args.length_penalty,
+            consider_end=True,
+            end_tokens=end_tokens,
+            no_repeat_ngram_size=args.no_repeat_ngram_size,
+            min_tgt_length=args.min_tgt_length,
+        )
     else:
-        raise ValueError(f'unknown strategy {args.sampling_strategy}')
-    
+        raise ValueError(f"unknown strategy {args.sampling_strategy}")
+
     def process(raw_text):
         if args.with_id:
-            query_id, raw_text = raw_text.split('\t')
+            query_id, raw_text = raw_text.split("\t")
         # add MASK
-        generation_mask = '[gMASK]' if args.task_mask else '[MASK]'
-        if 'MASK]' not in raw_text:
-            raw_text += ' ' + generation_mask
+        generation_mask = "[gMASK]" if args.task_mask else "[MASK]"
+        if "MASK]" not in raw_text:
+            raw_text += " " + generation_mask
         seq = tokenizer.EncodeAsIds(raw_text).tokenization
-        seq = [tokenizer.get_command('ENC').Id] + seq
-        if not raw_text.endswith('MASK]'):
-            seq = seq + [tokenizer.get_command('eos').Id]
-        print('raw text: {}\n'.format(raw_text))
+        seq = [tokenizer.get_command("ENC").Id] + seq
+        if not raw_text.endswith("MASK]"):
+            seq = seq + [tokenizer.get_command("eos").Id]
+        print("raw text: {}\n".format(raw_text))
         if len(seq) > args.max_sequence_length:
-            raise ValueError('text too long.')
+            raise ValueError("text too long.")
 
         # generation
         mbz = args.max_inference_batch_size
@@ -85,9 +93,9 @@ def main(model, args):
         output_list = [seq]
         # continually detect the first mark position
         while True:
-            seq = output_list[0] # TODO find the best one
+            seq = output_list[0]  # TODO find the best one
             # detect
-            mask_tokens = ['MASK', 'sMASK', 'gMASK'] if args.task_mask else ['MASK']
+            mask_tokens = ["MASK", "sMASK", "gMASK"] if args.task_mask else ["MASK"]
             mask_tokens = [tokenizer.get_command(token).Id for token in mask_tokens]
             mask_position = len(seq)
             for token in mask_tokens:
@@ -97,20 +105,31 @@ def main(model, args):
                     pass
             if mask_position == len(seq):
                 break
-            
-            get_func = partial(get_masks_and_position_ids_glm, mask_position=mask_position, context_length=len(seq))
+
+            get_func = partial(
+                get_masks_and_position_ids_glm,
+                mask_position=mask_position,
+                context_length=len(seq),
+            )
             output_list = []
             for tim in range(max(args.batch_size // mbz, 1)):
                 input_seq = torch.cuda.LongTensor(
-                    seq + [tokenizer.get_command('sop').Id] + [-1] * (args.out_seq_length - len(seq) - 1),
-                    device=args.device)
-                output = filling_sequence(model, input_seq,
-                        batch_size=min(args.batch_size, mbz),
-                        strategy=strategy,
-                        log_attention_weights=None,
-                        get_masks_and_position_ids=get_func
-                        )[0] # we don't use mems, fill back
-                if isinstance(output, torch.Tensor): # different strategies
+                    seq
+                    + [tokenizer.get_command("sop").Id]
+                    + [-1] * (args.out_seq_length - len(seq) - 1),
+                    device=args.device,
+                )
+                output = filling_sequence(
+                    model,
+                    input_seq,
+                    batch_size=min(args.batch_size, mbz),
+                    strategy=strategy,
+                    log_attention_weights=None,
+                    get_masks_and_position_ids=get_func,
+                )[
+                    0
+                ]  # we don't use mems, fill back
+                if isinstance(output, torch.Tensor):  # different strategies
                     output = list(output)
 
                 output_list.extend(output)
@@ -124,8 +143,12 @@ def main(model, args):
                     unfinished = len(output)
                 if output[unfinished - 1] in end_tokens:
                     unfinished -= 1
-                bog = output.index(tokenizer.get_command('sop').Id)
-                output_list[i] = output[:mask_position] + output[bog + 1:unfinished] + output[mask_position + 1:bog]
+                bog = output.index(tokenizer.get_command("sop").Id)
+                output_list[i] = (
+                    output[:mask_position]
+                    + output[bog + 1 : unfinished]
+                    + output[mask_position + 1 : bog]
+                )
 
         # decoding
         txts = []
@@ -135,24 +158,31 @@ def main(model, args):
 
         # save
         if args.with_id:
-            full_path = os.path.join(args.output_path, query_id + '.txt')
+            full_path = os.path.join(args.output_path, query_id + ".txt")
         else:
-            prefix = raw_text.replace('/', '')[:20]
-            full_path = timed_name(prefix, '.txt', args.output_path)
-            print(txts[0]) # print the first.
-        with open(full_path, 'w', encoding='utf-8') as fout:
+            prefix = raw_text.replace("/", "")[:20]
+            full_path = timed_name(prefix, ".txt", args.output_path)
+            print(txts[0])  # print the first.
+        with open(full_path, "w", encoding="utf-8") as fout:
             for txt in txts:
-                fout.write(txt + '\n')
+                fout.write(txt + "\n")
         os.chmod(full_path, stat.S_IRWXO + stat.S_IRWXG + stat.S_IRWXU)
 
     os.makedirs(args.output_path, exist_ok=True)
     generate_continually(process, args.input_source)
 
+
 from sat import AutoModel
 from sat.model.official import GLMModel
+
 if __name__ == "__main__":
     py_parser = argparse.ArgumentParser(add_help=False)
-    py_parser.add_argument('--sampling-strategy', type=str, default='BaseStrategy', help='type name of sampling strategy')
+    py_parser.add_argument(
+        "--sampling-strategy",
+        type=str,
+        default="BaseStrategy",
+        help="type name of sampling strategy",
+    )
     GLMModel.add_model_specific_args(py_parser)
     known, args_list = py_parser.parse_known_args()
     args = get_args(args_list)
@@ -161,8 +191,8 @@ if __name__ == "__main__":
 
     initialize_distributed(args)
     # build model
-    model,args = AutoModel.from_pretrained('glm-large-zh', args)
-    model.add_mixin('auto-regressive', CachedAutoregressiveMixin())
+    model, args = AutoModel.from_pretrained("glm-large-zh", args)
+    model.add_mixin("auto-regressive", CachedAutoregressiveMixin())
 
     with torch.no_grad():
         main(model, args)

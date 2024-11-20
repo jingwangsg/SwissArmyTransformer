@@ -6,13 +6,12 @@ Mostly copy-paste from https://github.com/pytorch/vision/blob/13b35ff/references
 """
 from pathlib import Path
 
+import datasets_.transforms as T
+import numpy as np
 import torch
 import torch.utils.data
 import torchvision
 from pycocotools import mask as coco_mask
-
-import datasets_.transforms as T
-import numpy as np
 
 # import cv2
 

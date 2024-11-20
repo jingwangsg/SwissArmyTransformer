@@ -1,22 +1,23 @@
+import base64
+import bz2
+import ctypes
+from functools import partial
+from typing import List
+
+import torch
 from torch.nn import Linear
 from torch.nn.parameter import Parameter
 
-import bz2
-import torch
-import base64
-import ctypes
-
-from typing import List
-from functools import partial
-from sat.mpu import copy_to_model_parallel_region
-from sat.mpu import gather_from_model_parallel_region
-from sat.mpu import reduce_from_model_parallel_region
-from sat.mpu import scatter_to_model_parallel_region
-from sat.mpu import ColumnParallelLinear, RowParallelLinear
 from sat.helpers import print_all, print_rank0
+from sat.mpu import (ColumnParallelLinear, RowParallelLinear,
+                     copy_to_model_parallel_region,
+                     gather_from_model_parallel_region,
+                     reduce_from_model_parallel_region,
+                     scatter_to_model_parallel_region)
 
 try:
-    from cpm_kernels.kernels.base import LazyKernelCModule, KernelFunction, round_up
+    from cpm_kernels.kernels.base import (KernelFunction, LazyKernelCModule,
+                                          round_up)
 
     class Kernel:
         def __init__(self, code: bytes, function_names: List[str]):
@@ -41,12 +42,18 @@ try:
     )
 except Exception as exception:
     kernels = None
-    print_all("Failed to load cpm_kernels:" + str(exception), level='WARNING')
+    print_all("Failed to load cpm_kernels:" + str(exception), level="WARNING")
 
 
 class W8A16Linear(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, inp: torch.Tensor, quant_w: torch.Tensor, scale_w: torch.Tensor, weight_bit_width):
+    def forward(
+        ctx,
+        inp: torch.Tensor,
+        quant_w: torch.Tensor,
+        scale_w: torch.Tensor,
+        weight_bit_width,
+    ):
         ctx.inp_shape = inp.size()
         ctx.weight_bit_width = weight_bit_width
         out_features = quant_w.size(0)
@@ -64,7 +71,12 @@ class W8A16Linear(torch.autograd.Function):
         grad_output = grad_output.contiguous().view(-1, weight.size(0))
         grad_input = grad_output.mm(weight)
         grad_weight = grad_output.t().mm(inp)
-        return grad_input.view(ctx.inp_shape), grad_weight.view(ctx.weight_shape), None, None
+        return (
+            grad_input.view(ctx.inp_shape),
+            grad_weight.view(ctx.weight_shape),
+            None,
+            None,
+        )
 
 
 def compress_int4_weight(weight: torch.Tensor):  # (n, m)
@@ -83,12 +95,19 @@ def compress_int4_weight(weight: torch.Tensor):  # (n, m)
             blockDim,
             0,
             stream,
-            [ctypes.c_void_p(weight.data_ptr()), ctypes.c_void_p(out.data_ptr()), ctypes.c_int32(n), ctypes.c_int32(m)],
+            [
+                ctypes.c_void_p(weight.data_ptr()),
+                ctypes.c_void_p(out.data_ptr()),
+                ctypes.c_int32(n),
+                ctypes.c_int32(m),
+            ],
         )
         return out
 
 
-def extract_weight_to_half(weight: torch.Tensor, scale_list: torch.Tensor, source_bit_width: int):
+def extract_weight_to_half(
+    weight: torch.Tensor, scale_list: torch.Tensor, source_bit_width: int
+):
     if source_bit_width == 8:
         func = kernels.int8WeightExtractionHalf
     elif source_bit_width == 4:
@@ -98,7 +117,9 @@ def extract_weight_to_half(weight: torch.Tensor, scale_list: torch.Tensor, sourc
 
     with torch.cuda.device(weight.device):
         n, m = weight.size(0), weight.size(1)
-        out = torch.empty(n, m * (8 // source_bit_width), dtype=torch.half, device="cuda")
+        out = torch.empty(
+            n, m * (8 // source_bit_width), dtype=torch.half, device="cuda"
+        )
         stream = torch.cuda.current_stream()
 
         gridDim = (n, 1, 1)
@@ -121,7 +142,15 @@ def extract_weight_to_half(weight: torch.Tensor, scale_list: torch.Tensor, sourc
 
 
 class QuantizedLinear(Linear):
-    def __init__(self, weight_bit_width: int, weight_tensor=None, bias_tensor=None, empty_init=False, *args, **kwargs):
+    def __init__(
+        self,
+        weight_bit_width: int,
+        weight_tensor=None,
+        bias_tensor=None,
+        empty_init=False,
+        *args,
+        **kwargs,
+    ):
         super(QuantizedLinear, self).__init__(*args, **kwargs)
         self.weight_bit_width = weight_bit_width
 
@@ -130,28 +159,43 @@ class QuantizedLinear(Linear):
 
         if weight_tensor is None or empty_init:
             self.weight = torch.empty(
-                shape[0], shape[1] * weight_bit_width // 8, dtype=torch.int8, device=kwargs["device"]
+                shape[0],
+                shape[1] * weight_bit_width // 8,
+                dtype=torch.int8,
+                device=kwargs["device"],
             )
-            self.weight_scale = torch.empty(shape[0], dtype=kwargs["dtype"], device=kwargs["device"])
+            self.weight_scale = torch.empty(
+                shape[0], dtype=kwargs["dtype"], device=kwargs["device"]
+            )
         else:
-            self.weight_scale = (weight_tensor.abs().max(dim=-1).values / ((2 ** (weight_bit_width - 1)) - 1)).half()
-            self.weight = torch.round(weight_tensor / self.weight_scale[:, None]).to(torch.int8)
+            self.weight_scale = (
+                weight_tensor.abs().max(dim=-1).values
+                / ((2 ** (weight_bit_width - 1)) - 1)
+            ).half()
+            self.weight = torch.round(weight_tensor / self.weight_scale[:, None]).to(
+                torch.int8
+            )
             if weight_bit_width == 4:
                 self.weight = compress_int4_weight(self.weight)
 
         self.weight = Parameter(self.weight.to(kwargs["device"]), requires_grad=False)
-        self.weight_scale = Parameter(self.weight_scale.to(kwargs["device"]), requires_grad=False)
+        self.weight_scale = Parameter(
+            self.weight_scale.to(kwargs["device"]), requires_grad=False
+        )
         if bias_tensor is not None:
             self.bias = Parameter(bias_tensor.to(kwargs["device"]), requires_grad=False)
         else:
             self.bias = None
 
     def forward(self, input):
-        output = W8A16Linear.apply(input, self.weight, self.weight_scale, self.weight_bit_width)
+        output = W8A16Linear.apply(
+            input, self.weight, self.weight_scale, self.weight_bit_width
+        )
         if self.bias is not None:
             output = output + self.bias
         return output
-    
+
+
 class QuantizedColumnParallelLinear(ColumnParallelLinear):
     def __init__(self, weight_bit_width: int, weight=None, *args, **kwargs):
         bias_val = kwargs.pop("bias_val")
@@ -163,17 +207,28 @@ class QuantizedColumnParallelLinear(ColumnParallelLinear):
 
         if weight is None:
             self.weight = torch.empty(
-                shape[0], shape[1] * weight_bit_width // 8, dtype=torch.int8, device=kwargs["device"]
+                shape[0],
+                shape[1] * weight_bit_width // 8,
+                dtype=torch.int8,
+                device=kwargs["device"],
             )
-            self.weight_scale = torch.empty(shape[0], dtype=kwargs["params_dtype"], device=kwargs["device"])
+            self.weight_scale = torch.empty(
+                shape[0], dtype=kwargs["params_dtype"], device=kwargs["device"]
+            )
         else:
-            self.weight_scale = (weight.abs().max(dim=-1).values / ((2 ** (weight_bit_width - 1)) - 1)).half()
-            self.weight = torch.round(weight / self.weight_scale[:, None]).to(torch.int8)
+            self.weight_scale = (
+                weight.abs().max(dim=-1).values / ((2 ** (weight_bit_width - 1)) - 1)
+            ).half()
+            self.weight = torch.round(weight / self.weight_scale[:, None]).to(
+                torch.int8
+            )
             if weight_bit_width == 4:
                 self.weight = compress_int4_weight(self.weight)
 
         self.weight = Parameter(self.weight.to(kwargs["device"]), requires_grad=False)
-        self.weight_scale = Parameter(self.weight_scale.to(kwargs["device"]), requires_grad=False)
+        self.weight_scale = Parameter(
+            self.weight_scale.to(kwargs["device"]), requires_grad=False
+        )
         if kwargs["bias"]:
             self.bias = bias_val
 
@@ -181,7 +236,9 @@ class QuantizedColumnParallelLinear(ColumnParallelLinear):
         # Set up backprop all-reduce.
         input_parallel = copy_to_model_parallel_region(input_)
         # Matrix multiply.
-        output_parallel = W8A16Linear.apply(input_parallel, self.weight, self.weight_scale, self.weight_bit_width)
+        output_parallel = W8A16Linear.apply(
+            input_parallel, self.weight, self.weight_scale, self.weight_bit_width
+        )
         if self.bias is not None:
             output_parallel = output_parallel + self.bias
         if self.gather_output:
@@ -203,17 +260,28 @@ class QuantizedRowParallelLinear(RowParallelLinear):
 
         if weight is None:
             self.weight = torch.empty(
-                shape[0], shape[1] * weight_bit_width // 8, dtype=torch.int8, device=kwargs["device"]
+                shape[0],
+                shape[1] * weight_bit_width // 8,
+                dtype=torch.int8,
+                device=kwargs["device"],
             )
-            self.weight_scale = torch.empty(shape[0], dtype=kwargs["params_dtype"], device=kwargs["device"])
+            self.weight_scale = torch.empty(
+                shape[0], dtype=kwargs["params_dtype"], device=kwargs["device"]
+            )
         else:
-            self.weight_scale = (weight.abs().max(dim=-1).values / ((2 ** (weight_bit_width - 1)) - 1)).half()
-            self.weight = torch.round(weight / self.weight_scale[:, None]).to(torch.int8)
+            self.weight_scale = (
+                weight.abs().max(dim=-1).values / ((2 ** (weight_bit_width - 1)) - 1)
+            ).half()
+            self.weight = torch.round(weight / self.weight_scale[:, None]).to(
+                torch.int8
+            )
             if weight_bit_width == 4:
                 self.weight = compress_int4_weight(self.weight)
 
         self.weight = Parameter(self.weight.to(kwargs["device"]), requires_grad=False)
-        self.weight_scale = Parameter(self.weight_scale.to(kwargs["device"]), requires_grad=False)
+        self.weight_scale = Parameter(
+            self.weight_scale.to(kwargs["device"]), requires_grad=False
+        )
         if kwargs["bias"]:
             self.bias = bias_val
 
@@ -224,7 +292,9 @@ class QuantizedRowParallelLinear(RowParallelLinear):
         else:
             input_parallel = scatter_to_model_parallel_region(input_)
         # Matrix multiply.
-        output_parallel = W8A16Linear.apply(input_parallel, self.weight, self.weight_scale, self.weight_bit_width)
+        output_parallel = W8A16Linear.apply(
+            input_parallel, self.weight, self.weight_scale, self.weight_bit_width
+        )
         # All-reduce across all the partitions.
         output_ = reduce_from_model_parallel_region(output_parallel)
         if self.bias is not None:
@@ -239,41 +309,53 @@ def quantize(model, weight_bit_width):
 
     print_rank0(f"> Quantizing model weight to {weight_bit_width} bits")
 
-    quantized_cnt = [0] # [] for tracing in closure
-    
+    quantized_cnt = [0]  # [] for tracing in closure
+
     def replace_linear(module):
         for name, sub_module in module.named_children():
-            if isinstance(sub_module, ColumnParallelLinear) and not isinstance(sub_module, QuantizedColumnParallelLinear):
-                setattr(module, name, QuantizedColumnParallelLinear(
-                    weight_bit_width=weight_bit_width,
-                    weight=sub_module.weight.to(torch.cuda.current_device()),
-                    input_size=sub_module.input_size,
-                    output_size=sub_module.output_size,
-                    bias=hasattr(sub_module, 'bias') and isinstance(sub_module.bias, Parameter),
-                    gather_output=sub_module.gather_output,
-                    params_dtype=torch.half,
-                    name=name,
-                    skip_init=True,
-                    device=sub_module.weight.device,
-                    bias_val=getattr(sub_module, 'bias', None),
-                    )
+            if isinstance(sub_module, ColumnParallelLinear) and not isinstance(
+                sub_module, QuantizedColumnParallelLinear
+            ):
+                setattr(
+                    module,
+                    name,
+                    QuantizedColumnParallelLinear(
+                        weight_bit_width=weight_bit_width,
+                        weight=sub_module.weight.to(torch.cuda.current_device()),
+                        input_size=sub_module.input_size,
+                        output_size=sub_module.output_size,
+                        bias=hasattr(sub_module, "bias")
+                        and isinstance(sub_module.bias, Parameter),
+                        gather_output=sub_module.gather_output,
+                        params_dtype=torch.half,
+                        name=name,
+                        skip_init=True,
+                        device=sub_module.weight.device,
+                        bias_val=getattr(sub_module, "bias", None),
+                    ),
                 )
                 quantized_cnt[0] += sub_module.weight.numel()
 
-            elif isinstance(sub_module, RowParallelLinear) and not isinstance(sub_module, QuantizedRowParallelLinear):
-                setattr(module, name, QuantizedRowParallelLinear(
-                    weight_bit_width=weight_bit_width,
-                    weight=sub_module.weight.to(torch.cuda.current_device()),
-                    input_size=sub_module.input_size,
-                    output_size=sub_module.output_size,
-                    bias=hasattr(sub_module, 'bias') and isinstance(sub_module.bias, Parameter),
-                    input_is_parallel=sub_module.input_is_parallel,
-                    params_dtype=torch.half,
-                    name=name,
-                    skip_init=True,
-                    device=sub_module.weight.device,
-                    bias_val=getattr(sub_module, 'bias', None),
-                    )
+            elif isinstance(sub_module, RowParallelLinear) and not isinstance(
+                sub_module, QuantizedRowParallelLinear
+            ):
+                setattr(
+                    module,
+                    name,
+                    QuantizedRowParallelLinear(
+                        weight_bit_width=weight_bit_width,
+                        weight=sub_module.weight.to(torch.cuda.current_device()),
+                        input_size=sub_module.input_size,
+                        output_size=sub_module.output_size,
+                        bias=hasattr(sub_module, "bias")
+                        and isinstance(sub_module.bias, Parameter),
+                        input_is_parallel=sub_module.input_is_parallel,
+                        params_dtype=torch.half,
+                        name=name,
+                        skip_init=True,
+                        device=sub_module.weight.device,
+                        bias_val=getattr(sub_module, "bias", None),
+                    ),
                 )
                 quantized_cnt[0] += sub_module.weight.numel()
             else:

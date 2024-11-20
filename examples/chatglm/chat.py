@@ -1,9 +1,12 @@
 from dotenv import load_dotenv
+
 load_dotenv()
 
-import os
-import torch
 import argparse
+import os
+
+import torch
+
 from sat import get_args
 
 args = get_args()
@@ -12,6 +15,7 @@ from chat_model import ChatModel
 
 model = ChatModel(args)
 from transformers import AutoTokenizer
+
 tokenizer = AutoTokenizer.from_pretrained("THUDM/chatglm-6b", trust_remote_code=True)
 model = model.eval()
 response, history = model.chat(tokenizer, "你好", history=[])

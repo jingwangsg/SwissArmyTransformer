@@ -1,14 +1,15 @@
 """
 from https://github.com/openai/gpt-2/, changed for chinese
 """
+
+import csv
 import json
 import os
-import csv
-import nltk
 import random
 
-from nltk import tokenize as nltk_tokenize
+import nltk
 import sentencepiece as spm
+from nltk import tokenize as nltk_tokenize
 
 """
 SentencePiece is an unsupervised text tokenizer and detokenizer mainly for Neural Network-based text generation 
@@ -24,8 +25,12 @@ or  git clone https://github.com/google/sentencepiece.git
 python setup.py install
 
 """
-PRETRAINED_MODEL_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)),
-     'embed_assets', 'chinese_sentencepiece/cog-pretrain.model')
+PRETRAINED_MODEL_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)),
+    "embed_assets",
+    "chinese_sentencepiece/cog-pretrain.model",
+)
+
 
 class SentencePieceTokenizer:
     """Trains and uses sentencepiece for text tokenization"""
@@ -38,8 +43,10 @@ class SentencePieceTokenizer:
         self.load_spm_model()
 
     @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path, cache_dir=None, *inputs, **kwargs):
-        if pretrained_model_name_or_path in ['glm-large', 'glm-10b']:
+    def from_pretrained(
+        cls, pretrained_model_name_or_path, cache_dir=None, *inputs, **kwargs
+    ):
+        if pretrained_model_name_or_path in ["glm-large", "glm-10b"]:
             return cls(model_path=PRETRAINED_MODEL_FILE)
         else:
             return cls(model_path=pretrained_model_name_or_path)
@@ -49,8 +56,8 @@ class SentencePieceTokenizer:
 
     def load_spm_model(self):
         """load sentencepiece model and parse vocab"""
-        if not os.path.exists(self.spm_model) and not self.spm_model.endswith('.model'):
-            self.spm_model = self.spm_model + '.model'
+        if not os.path.exists(self.spm_model) and not self.spm_model.endswith(".model"):
+            self.spm_model = self.spm_model + ".model"
         self.sp = spm.SentencePieceProcessor()
         self.sp.Load(self.spm_model)
         self.vocab_size = self.num_text_tokens = len(self.sp)
@@ -72,8 +79,8 @@ class SentencePieceTokenizer:
         # check if path exists
         dne = not os.path.exists(model_path)
         # check if path.model exists
-        if dne and not model_path.endswith('.model'):
-            dne = not os.path.exists(model_path + '.model')
+        if dne and not model_path.endswith(".model"):
+            dne = not os.path.exists(model_path + ".model")
         return not dne
 
     def encode(self, text):

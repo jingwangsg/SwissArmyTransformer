@@ -3,24 +3,26 @@
 # @Time    :   2022/6/16
 # @Author  :   Zhuoyi Yang
 # @Contact :   yangzhuo18@mails.tsinghua.edu.cn
-from sat.model.base_model import BaseMixin, non_conflict
 import torch
+
+from sat.model.base_model import BaseMixin, non_conflict
+
+
 class FFADDMixin(BaseMixin):
     def __init__(
-            self,
-            hidden_size: int,
-            layer_num: int = 24,
-            r: int = 0,
-            layer_range = None,
+        self,
+        hidden_size: int,
+        layer_num: int = 24,
+        r: int = 0,
+        layer_range=None,
     ):
         super().__init__()
         # Actual trainable parameters
         self.r = r
 
-        self.ffadd_linear = nn.ModuleList([
-            nn.ModuleList()
-            for layer_id in range(layer_num)
-        ])
+        self.ffadd_linear = nn.ModuleList(
+            [nn.ModuleList() for layer_id in range(layer_num)]
+        )
 
         if layer_range is None:
             layer_range = [i for i in range(layer_num)]
@@ -31,8 +33,7 @@ class FFADDMixin(BaseMixin):
             nn.init.zeros_(self.ffadd_linear[i][1].weight)
             nn.init.zeros_(self.ffadd_linear[i][1].bias)
 
-
-    def mlp_forward(self, hidden_states, layer_id,  attention_output = None, **kw_args):
+    def mlp_forward(self, hidden_states, layer_id, attention_output=None, **kw_args):
         layer = self.transformer.layers[layer_id].mlp
         intermediate_parallel = layer.dense_h_to_4h(hidden_states)
         intermediate_parallel = layer.activation_func(intermediate_parallel)

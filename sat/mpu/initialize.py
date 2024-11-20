@@ -18,9 +18,9 @@
 
 import torch
 
-from .utils import ensure_divisibility
 from sat.helpers import print_rank0
 
+from .utils import ensure_divisibility
 
 # Model parallel group that the current rank belongs to.
 _MODEL_PARALLEL_GROUP = None
@@ -30,6 +30,7 @@ _DATA_PARALLEL_GROUP = None
 _NODE_GROUP = None
 
 import os
+
 
 def initialize_model_parallel(model_parallel_size_):
     """
@@ -51,8 +52,9 @@ def initialize_model_parallel(model_parallel_size_):
     ranks 8 to 15 belong to the second box.
     """
     if torch.distributed.get_rank() == 0:
-        print_rank0('> initializing model parallel with size {}'.format(
-            model_parallel_size_))
+        print_rank0(
+            "> initializing model parallel with size {}".format(model_parallel_size_)
+        )
     # Get world size and rank. Ensure some consistencies.
     assert torch.distributed.is_initialized()
     world_size = torch.distributed.get_world_size()
@@ -62,8 +64,7 @@ def initialize_model_parallel(model_parallel_size_):
 
     # Build the data parallel groups.
     global _DATA_PARALLEL_GROUP
-    assert _DATA_PARALLEL_GROUP is None, \
-        'data parallel group is already initialized'
+    assert _DATA_PARALLEL_GROUP is None, "data parallel group is already initialized"
     for i in range(model_parallel_size):
         ranks = range(i, world_size, model_parallel_size)
         group = torch.distributed.new_group(ranks)
@@ -72,28 +73,26 @@ def initialize_model_parallel(model_parallel_size_):
 
     # Build the model parallel groups.
     global _MODEL_PARALLEL_GROUP
-    assert _MODEL_PARALLEL_GROUP is None, \
-        'model parallel group is already initialized'
+    assert _MODEL_PARALLEL_GROUP is None, "model parallel group is already initialized"
     for i in range(world_size // model_parallel_size):
-        ranks = range(i * model_parallel_size,
-                      (i + 1) * model_parallel_size)
+        ranks = range(i * model_parallel_size, (i + 1) * model_parallel_size)
         group = torch.distributed.new_group(ranks)
         if i == (rank // model_parallel_size):
             _MODEL_PARALLEL_GROUP = group
-    
+
     guess_local_world_size = world_size if world_size < 8 else 8
-    local_world_size = os.environ.get('LOCAL_WORLD_SIZE', None)
+    local_world_size = os.environ.get("LOCAL_WORLD_SIZE", None)
     if local_world_size is None:
         local_world_size = guess_local_world_size
-        print_rank0(f"You didn't pass in LOCAL_WORLD_SIZE environment variable. We use the guessed LOCAL_WORLD_SIZE={guess_local_world_size}. If this is wrong, please pass the LOCAL_WORLD_SIZE manually.")
+        print_rank0(
+            f"You didn't pass in LOCAL_WORLD_SIZE environment variable. We use the guessed LOCAL_WORLD_SIZE={guess_local_world_size}. If this is wrong, please pass the LOCAL_WORLD_SIZE manually."
+        )
     local_world_size = int(local_world_size)
     # Build the node groups.
     global _NODE_GROUP
-    assert _NODE_GROUP is None, \
-        'node group is already initialized'
+    assert _NODE_GROUP is None, "node group is already initialized"
     for i in range(world_size // local_world_size):
-        ranks = range(i * local_world_size,
-                    (i + 1) * local_world_size)
+        ranks = range(i * local_world_size, (i + 1) * local_world_size)
         group = torch.distributed.new_group(ranks)
         if i == (rank // local_world_size):
             _NODE_GROUP = group
@@ -108,22 +107,21 @@ def model_parallel_is_initialized():
 
 def get_model_parallel_group():
     """Get the model parallel group the caller rank belongs to."""
-    assert _MODEL_PARALLEL_GROUP is not None, \
-        'model parallel group is not initialized'
+    assert _MODEL_PARALLEL_GROUP is not None, "model parallel group is not initialized"
     return _MODEL_PARALLEL_GROUP
 
 
 def get_data_parallel_group():
     """Get the data parallel group the caller rank belongs to."""
-    assert _DATA_PARALLEL_GROUP is not None, \
-        'data parallel group is not initialized'
+    assert _DATA_PARALLEL_GROUP is not None, "data parallel group is not initialized"
     return _DATA_PARALLEL_GROUP
 
 
 def get_node_group():
     """Get the data parallel group the caller rank belongs to."""
-    assert _NODE_GROUP is not None, \
-        'node group is not initialized, please pass LOCAL_WORLD_SIZE environment variable.'
+    assert (
+        _NODE_GROUP is not None
+    ), "node group is not initialized, please pass LOCAL_WORLD_SIZE environment variable."
     return _NODE_GROUP
 
 

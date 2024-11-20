@@ -18,28 +18,33 @@
 import os
 import random
 import time
+
 import numpy as np
 import torch
-from sat.helpers import print_rank0
-
 from tensorboardX import SummaryWriter
 
-SUMMARY_WRITER_DIR_NAME = 'runs'
+from sat.helpers import print_rank0
+
+SUMMARY_WRITER_DIR_NAME = "runs"
+
 
 def get_sample_writer(name, base="..", iteration=0):
-    """Returns a tensorboard summary writer
-    """
+    """Returns a tensorboard summary writer"""
     return SummaryWriter(
-        log_dir=os.path.join(base, SUMMARY_WRITER_DIR_NAME, name), purge_step=iteration)
+        log_dir=os.path.join(base, SUMMARY_WRITER_DIR_NAME, name), purge_step=iteration
+    )
+
 
 def init_wandb_writer(args):
     """Initialize wandb writer."""
     import wandb
+
     wandb.init(
         project=args.wandb_project_name,
         name=args.experiment_name,
         dir=args.summary_dir,
     )
+
 
 # def print_rank0(message):
 #     if torch.distributed.is_initialized():
@@ -52,16 +57,23 @@ def init_wandb_writer(args):
 def print_args(args):
     """Print arguments."""
 
-    print_rank0('arguments:', flush=True)
+    print_rank0("arguments:", flush=True)
     for arg in vars(args):
-        dots = '.' * (29 - len(arg))
-        print_rank0('  {} {} {}'.format(arg, dots, getattr(args, arg)), flush=True)
+        dots = "." * (29 - len(arg))
+        print_rank0("  {} {} {}".format(arg, dots, getattr(args, arg)), flush=True)
     if args.save_args:
-        os.makedirs(os.path.join(args.summary_dir, SUMMARY_WRITER_DIR_NAME), exist_ok=True)
-        with open(os.path.join(args.summary_dir, SUMMARY_WRITER_DIR_NAME, args.experiment_name+'.txt'), "w") as f:
+        os.makedirs(
+            os.path.join(args.summary_dir, SUMMARY_WRITER_DIR_NAME), exist_ok=True
+        )
+        with open(
+            os.path.join(
+                args.summary_dir, SUMMARY_WRITER_DIR_NAME, args.experiment_name + ".txt"
+            ),
+            "w",
+        ) as f:
             for arg in vars(args):
-                dots = '.' * (29 - len(arg))
-                f.write('  {} {} {}\n'.format(arg, dots, getattr(args, arg)))
+                dots = "." * (29 - len(arg))
+                f.write("  {} {} {}\n".format(arg, dots, getattr(args, arg)))
 
 
 class Timers:
@@ -78,16 +90,16 @@ class Timers:
 
         def start(self):
             """Start the timer."""
-            assert not self.started_, 'timer has already been started'
+            assert not self.started_, "timer has already been started"
             torch.cuda.synchronize()
             self.start_time = time.time()
             self.started_ = True
 
         def stop(self):
             """Stop the timer."""
-            assert self.started_, 'timer is not started'
+            assert self.started_, "timer is not started"
             torch.cuda.synchronize()
-            self.elapsed_ += (time.time() - self.start_time)
+            self.elapsed_ += time.time() - self.start_time
             self.started_ = False
 
         def reset(self):
@@ -122,13 +134,12 @@ class Timers:
     def log(self, names, normalizer=1.0, reset=True):
         """Log a group of timers."""
         assert normalizer > 0.0
-        string = 'time (ms)'
+        string = "time (ms)"
         for name in names:
             if name not in self.timers:
                 continue
-            elapsed_time = self.timers[name].elapsed(
-                reset=reset) * 1000.0 / normalizer
-            string += ' | {}: {:.2f}'.format(name, elapsed_time)
+            elapsed_time = self.timers[name].elapsed(reset=reset) * 1000.0 / normalizer
+            string += " | {}: {:.2f}".format(name, elapsed_time)
         print_rank0(string)
 
 
@@ -136,13 +147,11 @@ def report_memory(name):
     """Simple GPU memory report."""
 
     mega_bytes = 1024.0 * 1024.0
-    string = name + ' memory (MB)'
-    string += ' | allocated: {}'.format(
-        torch.cuda.memory_allocated() / mega_bytes)
-    string += ' | max allocated: {}'.format(
-        torch.cuda.max_memory_allocated() / mega_bytes)
-    string += ' | cached: {}'.format(torch.cuda.memory_reserved() / mega_bytes)
-    string += ' | max cached: {}'.format(
-        torch.cuda.max_memory_reserved() / mega_bytes)
+    string = name + " memory (MB)"
+    string += " | allocated: {}".format(torch.cuda.memory_allocated() / mega_bytes)
+    string += " | max allocated: {}".format(
+        torch.cuda.max_memory_allocated() / mega_bytes
+    )
+    string += " | cached: {}".format(torch.cuda.memory_reserved() / mega_bytes)
+    string += " | max cached: {}".format(torch.cuda.max_memory_reserved() / mega_bytes)
     print_rank0(string)
-

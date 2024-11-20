@@ -2,11 +2,10 @@ import math
 from typing import Optional, Tuple, Union
 
 import torch
-from einops import rearrange, repeat
-from .triton_rotary import apply_rotary
 import torch.nn.functional as F
+from einops import rearrange, repeat
 
-
+from .triton_rotary import apply_rotary
 
 
 class ApplyRotaryEmb(torch.autograd.Function):
@@ -35,7 +34,9 @@ class ApplyRotaryEmb(torch.autograd.Function):
             inplace=inplace,
         )
         if isinstance(seqlen_offsets, int):
-            ctx.save_for_backward(cos, sin, position_id, cu_seqlens)  # Can't save int with save_for_backward
+            ctx.save_for_backward(
+                cos, sin, position_id, cu_seqlens
+            )  # Can't save int with save_for_backward
             ctx.seqlen_offsets = seqlen_offsets
         else:
             ctx.save_for_backward(cos, sin, position_id, cu_seqlens, seqlen_offsets)
@@ -101,15 +102,20 @@ def apply_rotary_emb(
     Apply rotary embedding to the first rotary_dim of x.
     """
     return ApplyRotaryEmb.apply(
-        x, cos, sin, position_id, interleaved, inplace, seqlen_offsets, cu_seqlens, max_seqlen
+        x,
+        cos,
+        sin,
+        position_id,
+        interleaved,
+        inplace,
+        seqlen_offsets,
+        cu_seqlens,
+        max_seqlen,
     )
 
 
 # For backward compatibility
 apply_rotary_emb_func = apply_rotary_emb
-
-
-
 
 
 class FastRotaryEmbedding(torch.nn.Module):
@@ -165,7 +171,8 @@ class FastRotaryEmbedding(torch.nn.Module):
         self.interleaved = interleaved
         self.scale_base = scale_base
         scale = (
-            (torch.arange(0, dim, 2, device=device, dtype=torch.float32) + 0.4 * dim) / (1.4 * dim)
+            (torch.arange(0, dim, 2, device=device, dtype=torch.float32) + 0.4 * dim)
+            / (1.4 * dim)
             if scale_base is not None
             else None
         )
@@ -176,19 +183,21 @@ class FastRotaryEmbedding(torch.nn.Module):
         self._sin_cached = None
         self._cos_k_cached = None
         self._sin_k_cached = None
-        
 
     def _compute_inv_freq(self, device=None):
         return 1.0 / (
             self.base
-            ** (torch.arange(self.shift, self.shift+self.dim, 2, device=device).float() / self.dim)
+            ** (
+                torch.arange(
+                    self.shift, self.shift + self.dim, 2, device=device
+                ).float()
+                / self.dim
+            )
         )
 
     def _update_cos_sin_cache(self, seqlen, position_id, device=None, dtype=None):
 
-        if (
-            seqlen > self._seq_len_cached
-        ):
+        if seqlen > self._seq_len_cached:
             self._seq_len_cached = seqlen
             # We want fp32 here, not self.inv_freq.dtype, since the model could be loaded in bf16
             # And the output of arange can be quite large, so bf16 would lose a lot of precision.
@@ -210,13 +219,17 @@ class FastRotaryEmbedding(torch.nn.Module):
             if self.scale is None:
                 self._cos_cached = torch.cos(freqs).to(dtype)
                 self._sin_cached = torch.sin(freqs).to(dtype)
-                
+
             else:
                 power = (
-                    torch.arange(seqlen, dtype=self.scale.dtype, device=self.scale.device)
+                    torch.arange(
+                        seqlen, dtype=self.scale.dtype, device=self.scale.device
+                    )
                     - seqlen // 2
                 ) / self.scale_base
-                scale = self.scale.to(device=power.device) ** rearrange(power, "s -> s 1")
+                scale = self.scale.to(device=power.device) ** rearrange(
+                    power, "s -> s 1"
+                )
                 # We want the multiplication by scale to happen in fp32
                 self._cos_cached = (torch.cos(freqs) * scale).to(dtype)
                 self._sin_cached = (torch.sin(freqs) * scale).to(dtype)
@@ -229,10 +242,10 @@ class FastRotaryEmbedding(torch.nn.Module):
         k: torch.Tensor,
         position_id: torch.Tensor,
         max_seqlen,
-        layer_id: int = 0
+        layer_id: int = 0,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        q: (batch, nheads, seqlen, headdim) 
+        q: (batch, nheads, seqlen, headdim)
         k: (batch, nheads, seqlen, headdim)
         position_id: (batch, seqlen)
         max_seqlen: max number of position_ids
@@ -243,25 +256,27 @@ class FastRotaryEmbedding(torch.nn.Module):
             position_id = position_id.expand(q.shape[0], -1)
 
         max_position_id = max_seqlen
-        self._update_cos_sin_cache(max_seqlen, position_id, device=q.device, dtype=q.dtype)
-        
+        self._update_cos_sin_cache(
+            max_seqlen, position_id, device=q.device, dtype=q.dtype
+        )
+
         q = apply_rotary_emb_func(
-                q,
-                self._cos_cached,
-                self._sin_cached,
-                position_id,
-                interleaved=self.interleaved,
-                inplace=True,
-                max_seqlen=max_position_id
-            )
+            q,
+            self._cos_cached,
+            self._sin_cached,
+            position_id,
+            interleaved=self.interleaved,
+            inplace=True,
+            max_seqlen=max_position_id,
+        )
         k = apply_rotary_emb_func(
-                k,
-                self._cos_cached,
-                self._sin_cached,
-                position_id,
-                interleaved=self.interleaved,
-                inplace=True,
-                max_seqlen=max_position_id
-            )
-        
+            k,
+            self._cos_cached,
+            self._sin_cached,
+            position_id,
+            interleaved=self.interleaved,
+            inplace=True,
+            max_seqlen=max_position_id,
+        )
+
         return q, k

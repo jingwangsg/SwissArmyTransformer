@@ -14,14 +14,16 @@
 # limitations under the License.
 
 
-import torch
 import math
+
+import torch
 
 
 def ensure_divisibility(numerator, denominator):
     """Ensure that numerator is divisible by the denominator."""
-    assert numerator % denominator == 0, '{} is not divisible by {}'.format(
-        numerator, denominator)
+    assert numerator % denominator == 0, "{} is not divisible by {}".format(
+        numerator, denominator
+    )
 
 
 def divide(numerator, denominator):
@@ -31,8 +33,7 @@ def divide(numerator, denominator):
     return numerator // denominator
 
 
-def split_tensor_along_last_dim(tensor, num_partitions,
-                                contiguous_split_chunks=False):
+def split_tensor_along_last_dim(tensor, num_partitions, contiguous_split_chunks=False):
     """Split a tensor along its last dimension.
     Arguments:
         tensor: input tensor.
@@ -45,14 +46,15 @@ def split_tensor_along_last_dim(tensor, num_partitions,
     last_dim = tensor.dim() - 1
     if isinstance(num_partitions, int):
         last_dim_size = divide(tensor.size()[last_dim], num_partitions)
-    # Split.
+        # Split.
         tensor_list = torch.split(tensor, last_dim_size, dim=last_dim)
     elif isinstance(num_partitions, (list, tuple)):
         factor = tensor.size()[last_dim] // sum(num_partitions)
-        tensor_list = torch.split(tensor, [factor * x for x in num_partitions],
-                                  dim=last_dim)
+        tensor_list = torch.split(
+            tensor, [factor * x for x in num_partitions], dim=last_dim
+        )
     else:
-        raise ValueError('num_partitions must be either int or list/tuple.')
+        raise ValueError("num_partitions must be either int or list/tuple.")
     # Note: torch.split does not create contiguous tensors by default.
     if contiguous_split_chunks:
         return tuple(chunk.contiguous() for chunk in tensor_list)
@@ -62,12 +64,13 @@ def split_tensor_along_last_dim(tensor, num_partitions,
 
 class VocabUtility:
     """Split the vocabulary into `world_size` chunks amd return the
-        first and last index of the vocabulary belonging to the `rank`
-        partition: Note that indecies in [fist, last)"""
+    first and last index of the vocabulary belonging to the `rank`
+    partition: Note that indecies in [fist, last)"""
 
     @staticmethod
-    def vocab_range_from_per_partition_vocab_size(per_partition_vocab_size,
-                                                  rank, world_size):
+    def vocab_range_from_per_partition_vocab_size(
+        per_partition_vocab_size, rank, world_size
+    ):
         index_f = rank * per_partition_vocab_size
         index_l = index_f + per_partition_vocab_size
         return index_f, index_l
@@ -76,31 +79,40 @@ class VocabUtility:
     def vocab_range_from_global_vocab_size(global_vocab_size, rank, world_size):
         per_partition_vocab_size = divide(global_vocab_size, world_size)
         return VocabUtility.vocab_range_from_per_partition_vocab_size(
-            per_partition_vocab_size, rank, world_size)
+            per_partition_vocab_size, rank, world_size
+        )
+
 
 def sqrt(x):
     return int(math.sqrt(x) + 1e-4)
 
+
 def unscaled_init_method(sigma):
     """Init method based on N(0, sigma)."""
+
     def init_(tensor, **kwargs):
         return torch.nn.init.normal_(tensor, mean=0.0, std=sigma)
 
     return init_
 
+
 def scaled_init_method(sigma, num_layers):
     """Init method based on N(0, sigma/sqrt(2*num_layers)."""
     std = sigma / math.sqrt(2.0 * num_layers)
+
     def init_(tensor, **kwargs):
         return torch.nn.init.normal_(tensor, mean=0.0, std=std)
 
     return init_
 
+
 @torch.jit.script
 def gelu_impl(x):
-     """OpenAI's gelu implementation."""
-     return 0.5 * x * (1.0 + torch.tanh(0.7978845608028654 * x *
-                                        (1.0 + 0.044715 * x * x)))
+    """OpenAI's gelu implementation."""
+    return (
+        0.5 * x * (1.0 + torch.tanh(0.7978845608028654 * x * (1.0 + 0.044715 * x * x)))
+    )
 
-def gelu(x): 
+
+def gelu(x):
     return gelu_impl(x)

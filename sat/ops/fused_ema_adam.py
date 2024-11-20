@@ -1,9 +1,12 @@
 import torch
-from torch.optim import SGD
-from deepspeed.ops.adam.multi_tensor_apply import MultiTensorApply
 from deepspeed.accelerator import get_accelerator
+from deepspeed.ops.adam.multi_tensor_apply import MultiTensorApply
+from torch.optim import SGD
+
 from sat.ops.ops_builder.fused_ema_adam import FusedEmaAdamBuilder
+
 multi_tensor_applier = MultiTensorApply(2048 * 32)
+
 
 class FusedEmaAdam(torch.optim.Optimizer):
     """Ema-Adam algorithm implemented by ZPHZ.
@@ -34,7 +37,7 @@ class FusedEmaAdam(torch.optim.Optimizer):
     In general, ``opt_level="O1"`` is recommended.
 
 
-    
+
     Adam was been proposed in `Adam: A Method for Stochastic Optimization`_.
 
     Arguments:
@@ -62,23 +65,30 @@ class FusedEmaAdam(torch.optim.Optimizer):
         https://openreview.net/forum?id=ryQu7f-RZ
     """
 
-    def __init__(self,
-                 params,
-                 lr=1e-3,
-                 bias_correction=True,
-                 betas=(0.9, 0.999),
-                 eps=1e-8,
-                 adam_w_mode=True,
-                 weight_decay=0.,
-                 amsgrad=False,
-                 set_grad_none=True,
-                 ema_decay=0.9999,
-                 use_num_upates=True
-                 ):
+    def __init__(
+        self,
+        params,
+        lr=1e-3,
+        bias_correction=True,
+        betas=(0.9, 0.999),
+        eps=1e-8,
+        adam_w_mode=True,
+        weight_decay=0.0,
+        amsgrad=False,
+        set_grad_none=True,
+        ema_decay=0.9999,
+        use_num_upates=True,
+    ):
 
         if amsgrad:
-            raise RuntimeError('FusedAdam does not support the AMSGrad variant.')
-        defaults = dict(lr=lr, bias_correction=bias_correction, betas=betas, eps=eps, weight_decay=weight_decay)
+            raise RuntimeError("FusedAdam does not support the AMSGrad variant.")
+        defaults = dict(
+            lr=lr,
+            bias_correction=bias_correction,
+            betas=betas,
+            eps=eps,
+            weight_decay=weight_decay,
+        )
         super(FusedEmaAdam, self).__init__(params, defaults)
         self.adam_w_mode = 1 if adam_w_mode else 0
         self.set_grad_none = set_grad_none
@@ -97,19 +107,19 @@ class FusedEmaAdam(torch.optim.Optimizer):
     def zero_grad(self):
         if self.set_grad_none:
             for group in self.param_groups:
-                for p in group['params']:
+                for p in group["params"]:
                     p.grad = None
         else:
             super(FusedEmaAdam, self).zero_grad()
-    
+
     def copy_to(self):
         for group in self.param_groups:
-            if len(group['params']) == 0:
+            if len(group["params"]) == 0:
                 continue
-            for p in group['params']:
+            for p in group["params"]:
                 state = self.state[p]
                 if p.requires_grad:
-                    p.data.copy_(state['shadow'].data)
+                    p.data.copy_(state["shadow"].data)
 
     def store(self, parameters):
         """
@@ -134,8 +144,15 @@ class FusedEmaAdam(torch.optim.Optimizer):
         for c_param, param in zip(self.collected_params, parameters):
             param.data.copy_(c_param.data)
 
-
-    def step(self, closure=None, grads=None, output_params=None, scale=None, grad_norms=None, grad_scaler=None):
+    def step(
+        self,
+        closure=None,
+        grads=None,
+        output_params=None,
+        scale=None,
+        grad_norms=None,
+        grad_scaler=None,
+    ):
         """Performs a single optimization step.
 
         Arguments:
@@ -146,7 +163,7 @@ class FusedEmaAdam(torch.optim.Optimizer):
         """
         if any(p is not None for p in [grads, output_params, scale, grad_norms]):
             raise RuntimeError(
-                'FusedAdam has been updated.  Simply initialize it identically to torch.optim.Adam, and call step() with no arguments.'
+                "FusedAdam has been updated.  Simply initialize it identically to torch.optim.Adam, and call step() with no arguments."
             )
         loss = None
         if closure is not None:
@@ -155,31 +172,33 @@ class FusedEmaAdam(torch.optim.Optimizer):
         ema_decay = self.ema_decay
         if self.num_updates >= 0:
             self.num_updates += 1
-            ema_decay = min(self.ema_decay,(1 + self.num_updates) / (10 + self.num_updates))
-
+            ema_decay = min(
+                self.ema_decay, (1 + self.num_updates) / (10 + self.num_updates)
+            )
 
         for group in self.param_groups:
-            if len(group['params']) == 0:
+            if len(group["params"]) == 0:
                 continue
-            bias_correction = 1 if group['bias_correction'] else 0
-            beta1, beta2 = group['betas']
+            bias_correction = 1 if group["bias_correction"] else 0
+            beta1, beta2 = group["betas"]
 
             # assume same step across group now to simplify things
             # per parameter step can be easily support by making it tensor, or pass list into kernel
-            if 'step' not in group:
-                group['step'] = 0
+            if "step" not in group:
+                group["step"] = 0
 
             # create lists for multi-tensor apply
             g_16, p_16, m_16, v_16, s_16 = [], [], [], [], []
             g_bf, p_bf, m_bf, v_bf, s_bf = [], [], [], [], []
             g_32, p_32, m_32, v_32, s_32 = [], [], [], [], []
 
-            for p in group['params']:
+            for p in group["params"]:
                 if p.grad is None:
                     continue
                 if p.grad.data.is_sparse:
                     raise RuntimeError(
-                        'FusedEmaAdam does not support sparse gradients, please consider SparseAdam instead')
+                        "FusedEmaAdam does not support sparse gradients, please consider SparseAdam instead"
+                    )
 
                 state = self.state[p]
                 # State initialization
@@ -187,51 +206,84 @@ class FusedEmaAdam(torch.optim.Optimizer):
                     # DeepSpeed ZeRO 3 processes each subgroup a time, so we need to keep tracking step count for each tensor separately.
                     # While this is not an issue for ZeRO 1 & 2, since they apply a single optimization step to the whole param group at the same time.
                     # In order to keep backward compatibility for the existing checkpoints, we use group['state'] to initialize state['step'] if it exists.
-                    state['step'] = group.get('step', 0)
+                    state["step"] = group.get("step", 0)
                     # Exponential moving average of gradient values
-                    state['exp_avg'] = torch.zeros_like(p.data)
+                    state["exp_avg"] = torch.zeros_like(p.data)
                     # Exponential moving average of squared gradient values
-                    state['exp_avg_sq'] = torch.zeros_like(p.data)
+                    state["exp_avg_sq"] = torch.zeros_like(p.data)
                     # Exponential moving average of shadow weights
-                    state['shadow'] = p.data.clone()
+                    state["shadow"] = p.data.clone()
 
                 if p.dtype == torch.float16:
                     g_16.append(p.grad.data)
                     p_16.append(p.data)
-                    m_16.append(state['exp_avg'])
-                    v_16.append(state['exp_avg_sq'])
-                    s_16.append(state['shadow'])
+                    m_16.append(state["exp_avg"])
+                    v_16.append(state["exp_avg_sq"])
+                    s_16.append(state["shadow"])
                 elif p.dtype == torch.bfloat16:
                     g_bf.append(p.grad)
                     p_bf.append(p)
-                    m_bf.append(state['exp_avg'])
-                    v_bf.append(state['exp_avg_sq'])
-                    s_bf.append(state['shadow'])
+                    m_bf.append(state["exp_avg"])
+                    v_bf.append(state["exp_avg_sq"])
+                    s_bf.append(state["shadow"])
                 elif p.dtype == torch.float32:
                     g_32.append(p.grad.data)
                     p_32.append(p.data)
-                    m_32.append(state['exp_avg'])
-                    v_32.append(state['exp_avg_sq'])
-                    s_32.append(state['shadow'])
+                    m_32.append(state["exp_avg"])
+                    v_32.append(state["exp_avg_sq"])
+                    s_32.append(state["shadow"])
                 else:
-                    raise RuntimeError('FusedEmaAdam only support fp16, bf16 and fp32.')
+                    raise RuntimeError("FusedEmaAdam only support fp16, bf16 and fp32.")
 
             if len(g_16) > 0:
-                state['step'] += 1
-                multi_tensor_applier(self.multi_tensor_ema_adam, self._dummy_overflow_buf, [g_16, p_16, m_16, v_16, s_16],
-                                     group['lr'], ema_decay, beta1, beta2, group['eps'], state['step'], self.adam_w_mode,
-                                     bias_correction, group['weight_decay'])
+                state["step"] += 1
+                multi_tensor_applier(
+                    self.multi_tensor_ema_adam,
+                    self._dummy_overflow_buf,
+                    [g_16, p_16, m_16, v_16, s_16],
+                    group["lr"],
+                    ema_decay,
+                    beta1,
+                    beta2,
+                    group["eps"],
+                    state["step"],
+                    self.adam_w_mode,
+                    bias_correction,
+                    group["weight_decay"],
+                )
 
             if len(g_bf) > 0:
-                state['step'] += 1
-                multi_tensor_applier(self.multi_tensor_ema_adam, self._dummy_overflow_buf, [g_bf, p_bf, m_bf, v_bf, s_bf],
-                                     group['lr'], ema_decay, beta1, beta2, group['eps'], state['step'], self.adam_w_mode,
-                                     bias_correction, group['weight_decay'])
+                state["step"] += 1
+                multi_tensor_applier(
+                    self.multi_tensor_ema_adam,
+                    self._dummy_overflow_buf,
+                    [g_bf, p_bf, m_bf, v_bf, s_bf],
+                    group["lr"],
+                    ema_decay,
+                    beta1,
+                    beta2,
+                    group["eps"],
+                    state["step"],
+                    self.adam_w_mode,
+                    bias_correction,
+                    group["weight_decay"],
+                )
 
             if len(g_32) > 0:
-                state['step'] += 1
-                multi_tensor_applier(self.multi_tensor_ema_adam, self._dummy_overflow_buf, [g_32, p_32, m_32, v_32, s_32],
-                                     group['lr'], ema_decay, beta1, beta2, group['eps'], state['step'], self.adam_w_mode,
-                                     bias_correction, group['weight_decay'])
+                state["step"] += 1
+                multi_tensor_applier(
+                    self.multi_tensor_ema_adam,
+                    self._dummy_overflow_buf,
+                    [g_32, p_32, m_32, v_32, s_32],
+                    group["lr"],
+                    ema_decay,
+                    beta1,
+                    beta2,
+                    group["eps"],
+                    state["step"],
+                    self.adam_w_mode,
+                    bias_correction,
+                    group["weight_decay"],
+                )
 
         return loss
