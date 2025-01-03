@@ -23,3 +23,4 @@ runs
 dist/
 *.egg-info
 args/
+.venv
